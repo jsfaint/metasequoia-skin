@@ -1,4 +1,11 @@
-# Skill: metasequoia-skin
+---
+name: metasequoia-skin
+description: 生成、校验、安装水杉输入法（metasequoia ime）的候选窗皮肤包。用户描述想要的观感（配色、圆角、阴影、背景图、装饰图、翻页箭头、工具栏配色），或需要手写/排查 skin.toml，或皮肤装上没反应、设置页报「缺少 candidate_window」「candidate 配色无效」「找不到 image 文件」时使用。产出 skin.toml + assets，并用 check_skin.py 离线校验。
+compatibility: opencode
+metadata:
+  product: metasequoia-ime
+  language: zh-CN
+---
 
 # 水杉输入法皮肤（metasequoia-skin）
 
