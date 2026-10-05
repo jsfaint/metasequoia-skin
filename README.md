@@ -11,24 +11,86 @@ assets/            # 可选，背景图 / 装饰图放这里
   mountain.png
 ```
 
-## 快速上手
+## 安装
 
-### 1. 装上这个技能
+分两步：先把**技能**装到你的 agent（装一次），再用它生成并安装**皮肤包**（每个皮肤一次）。
 
-把 `skills/metasequoia-skin/` 整个目录复制到你的 agent 的技能目录：
+### A. 装技能
+
+把 `skills/metasequoia-skin/` 整个目录放进 agent 的技能目录，**目录名别改**：
 
 | 作用范围 | opencode | Claude Code / Agent Skills 通用 |
 |---|---|---|
-| 全局 | `~/.config/opencode/skills/metasequoia-skin/` | `~/.claude/skills/metasequoia-skin/`、`~/.agents/skills/metasequoia-skin/` |
+| 全局（推荐） | `~/.config/opencode/skills/metasequoia-skin/` | `~/.claude/skills/metasequoia-skin/`、`~/.agents/skills/metasequoia-skin/` |
 | 当前项目 | `.opencode/skills/metasequoia-skin/` | `.claude/skills/metasequoia-skin/`、`.agents/skills/metasequoia-skin/` |
 
-Windows PowerShell 示例：
+目录名必须与 `SKILL.md` frontmatter 里的 `name` 一字不差，否则宿主不会加载。
+
+<details>
+<summary><b>方式 1 · git clone（推荐，以后好更新）</b></summary>
 
 ```powershell
-Copy-Item -Recurse skills\metasequoia-skin "$env:USERPROFILE\.config\opencode\skills\metasequoia-skin"
+# Windows PowerShell —— 装到 opencode 全局目录
+git clone --depth 1 https://github.com/jsfaint/metasequoia-skin.git "$env:TEMP\metasequoia-skin"
+Copy-Item -Recurse "$env:TEMP\metasequoia-skin\skills\metasequoia-skin" "$env:USERPROFILE\.config\opencode\skills\metasequoia-skin"
 ```
 
-### 2. 跟 AI 说你要什么
+```bash
+# macOS / Linux —— 装到 Claude Code 全局目录
+git clone --depth 1 https://github.com/jsfaint/metasequoia-skin.git ~/.claude/skills/metasequoia-skin
+```
+
+想省掉仓库、只留技能目录，用 sparse-checkout：
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/jsfaint/metasequoia-skin.git ~/.claude/skills/metasequoia-skin
+git -C ~/.claude/skills/metasequoia-skin sparse-checkout set skills/metasequoia-skin
+```
+</details>
+
+<details>
+<summary><b>方式 2 · 已经有本地仓库，直接复制</b></summary>
+
+```powershell
+Copy-Item -Recurse .\skills\metasequoia-skin "$env:USERPROFILE\.config\opencode\skills\metasequoia-skin"
+```
+
+```bash
+cp -r ./skills/metasequoia-skin ~/.config/opencode/skills/metasequoia-skin
+```
+</details>
+
+<details>
+<summary><b>方式 3 · 下载 zip 手动解压</b></summary>
+
+在仓库页面点 **Code → Download ZIP**，解压后把里面的 `skills\metasequoia-skin` 文件夹拖到上表的目录。
+</details>
+
+**装完确认**：新开一个会话（技能在启动时扫描），让 agent 报一下可用技能，看得到 `metasequoia-skin` 就成了。
+
+opencode 里如果技能被权限拦住，在 `opencode.json` 放行：
+
+```json
+{ "permission": { "skill": { "metasequoia-skin": "allow" } } }
+```
+
+**更新**：重新 clone 覆盖旧目录。**卸载**：删掉那个目录。
+
+### B. 装皮肤包
+
+1. 设置 → 皮肤 → 外部皮肤，**记下那行灰色路径**——那才是真实位置。默认是 `%LOCALAPPDATA%\metasequoiaime\skins`，数据目录装在别的盘时路径会变；旁边的「打开目录」按钮能直接打开它。
+2. 把整个 `my-skin/` 文件夹复制进去。**不要**把 `skin.toml` 直接丢进 `skins\`，也不要套一层 zip。最终结构必须是 `skins\my-skin\skin.toml`。
+3. 回到 设置 → 皮肤 → 点 **刷新皮肤** → 找到你的皮肤 → 打开开关。列表里能实时预览（横排 / 竖排 / 工具栏三张，另有「预览浅色」按钮）。
+
+改完 `skin.toml` 或图片后，点一次「刷新皮肤」就全量重载，**不需要重启输入法服务**。
+
+**只想改内置皮肤的翻页箭头**：不走外部皮肤这套流程。编辑 `<skins 目录>\default\<内置名>\skin.toml` 里的 `[candidate_window] page_arrows`，然后点「刷新皮肤」。只有 `id`、`name`、`schema_version`、`page_arrows` 会被读，其余字段写了不生效。
+
+**设置页根本不显示这个皮肤**：对照 [SKILL.md 的故障排查表](skills/metasequoia-skin/SKILL.md)。最常见的是目录层级错了、`id` 与目录名不一致、目录名带了大写或中文。
+
+## 快速上手
+
+### 1. 跟 AI 说你要什么
 
 ```
 帮我做一个水杉输入法的皮肤：深蓝底、琥珀色高亮、圆角大一点，
@@ -37,7 +99,7 @@ Copy-Item -Recurse skills\metasequoia-skin "$env:USERPROFILE\.config\opencode\sk
 
 AI 会问几个问题（明暗、要不要图、要不要改工具栏、翻页箭头），然后生成 `skin.toml`。
 
-### 3. 校验
+### 2. 校验
 
 ```powershell
 uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
@@ -49,13 +111,7 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 
 传 `skins` 根目录则一次校验所有子目录（自动跳过 `default` 和 `*.bak`）。需要 Python 3.11+，只用标准库 `tomllib`，无第三方依赖。
 
-### 4. 安装启用
-
-1. 设置 → 皮肤 → 外部皮肤区域，记下那行灰色路径（默认 `%LOCALAPPDATA%\metasequoiaime\skins`）
-2. 把整个 `my-skin/` 文件夹复制进去 —— **不要**把 `skin.toml` 直接丢进 `skins\`，也不要套一层 zip
-3. 设置 → 皮肤 → **刷新皮肤** → 找到你的皮肤 → 打开开关
-
-改完 `skin.toml` 或图片后，点一次「刷新皮肤」就全量重载，**不需要重启输入法服务**。
+校验过了就按上面 [B. 装皮肤包](#b-装皮肤包) 装上，在设置页点开开关。
 
 ## 皮肤能改什么
 
@@ -150,12 +206,13 @@ preedit_divider = "#6B69D6"
 
 ```text
 .
+├─ LICENSE                     # MIT
 ├─ README.md
 └─ skills/
    └─ metasequoia-skin/
-      ├─ SKILL.md                 # 技能正文：完整字段规范、流程、故障排查表
+      ├─ SKILL.md              # 技能正文：完整字段规范、流程、故障排查表
       └─ scripts/
-         └─ check_skin.py         # 离线校验器，无第三方依赖
+         └─ check_skin.py      # 离线校验器，无第三方依赖
 ```
 
 ## 与水杉源码的关系
@@ -168,12 +225,14 @@ preedit_divider = "#6B69D6"
 
 ## 许可
 
-仓库尚未添加 LICENSE 文件，即默认保留所有权利。皮肤包里建议自己声明授权（`skin.toml` 的 `[license]` 表，输入法不读，但分享前该写）：
+本仓库的代码与文档以 [MIT](LICENSE) 授权发布。
+
+**生成的皮肤包归你自己**，MIT 不要求你把皮肤公开。但分享出去之前请在 `skin.toml` 的 `[license]` 表里声明授权（输入法不读这张表，只是分享时该有的礼节）：
 
 ```toml
 [license]
-code = "MIT"
-assets = "CC-BY-4.0 / 自绘"
+code = "MIT"                          # skin.toml 本身的授权
+assets = "CC-BY-4.0 / 自绘"           # 图片素材的授权
 source = "素材出处与授权说明"
 ```
 
