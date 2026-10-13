@@ -4,6 +4,10 @@
 规则逐条对齐 Server 的解析实现 server/src/skin/candidate_skin_catalog.cpp（CandidateSkinCatalog::Load），
 错误文案也沿用同一套中文，方便和设置页「皮肤 → 外部皮肤」底部的诊断信息对照。
 
+支持 schema_version 1（通用卡片皮肤）与 2（追加九宫格贴图面板、自由挂件、面板内安全内边距、
+行距、面板外留白）。v2 字段只在 schema_version = 2 时被解析，写在 v1 里会被静默忽略——这一条
+不报错，所以这里额外给一条警告。
+
 用法：
     uv run check_skin.py <皮肤包目录>      # 目录里应有 skin.toml
     uv run check_skin.py <skins 根目录>    # 目录本身没有 skin.toml 时，扫描其下所有子目录
@@ -41,6 +45,31 @@ THEMES = ("dark", "light")
 ALIGNMENTS = ("left", "center", "right")
 FITS = ("cover", "contain", "stretch")
 SHADOWS = ("none", "soft", "strong")
+# v2：[[candidate_window.decorations]] 的 anchor 白名单。
+ANCHORS = (
+    "top-left",
+    "top-right",
+    "bottom-left",
+    "bottom-right",
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "center",
+)
+# v2：content_insets_dip 与 outer_insets_dip 的四边上限（C++ 里两边不同）。
+CONTENT_INSET_BOUNDS = {"top": 200.0, "right": 500.0, "bottom": 200.0, "left": 500.0}
+OUTER_INSET_BOUNDS = {"top": 500.0, "right": 500.0, "bottom": 500.0, "left": 500.0}
+# v2 专有的 [candidate_window] 键：写在 schema_version = 1 里会被静默忽略。
+V2_WINDOW_KEYS = (
+    "border_image",
+    "content_insets_dip",
+    "line_gap_dip",
+    "outer_insets_dip",
+    "decorations",
+)
+# 动图只在 WebView2 会动（D2D 用 WIC 取首帧，静态）。
+ANIMATED_SUFFIXES = (".gif", ".webp", ".apng")
 
 # ReadColors 逐键检查的基础配色键，值上限 80 字节。
 BASE_COLOR_KEYS = (
@@ -65,7 +94,17 @@ DETAIL_COLOR_KEYS = (
     "preedit_background",
     "preedit_divider",
 )
-CANDIDATE_COLOR_KEYS = BASE_COLOR_KEYS + DETAIL_COLOR_KEYS
+# 翻译里的词性标记（`.cand-translation .cand-pos`）与义项分隔符（`.cand-sep`）可以单独配色，
+# 选中行另有四个对应的 selected_ 键；都不写时与 translation 同色。
+# 依据：数据目录 html/webview2/candwnd/README.md，上游是
+# server/src/window/candidate_presenter.cpp 的 SetTranslationColors / SetSelectedTranslationColors。
+TRANSLATION_RUN_COLOR_KEYS = (
+    "translation_pos",
+    "translation_separator",
+    "selected_translation_pos",
+    "selected_translation_separator",
+)
+CANDIDATE_COLOR_KEYS = BASE_COLOR_KEYS + DETAIL_COLOR_KEYS + TRANSLATION_RUN_COLOR_KEYS
 # [candidate.dark.menu] / [candidate.light.menu] 的四个键，同样走 ReadCssColor。
 MENU_COLOR_KEYS = ("background", "border", "text", "hover")
 # ReadToolbarColors 逐键检查的工具栏配色键，值上限 80 字节。
@@ -139,18 +178,57 @@ def read_enum(
     return True, value
 
 
+def numeric_value(value: object) -> float | None:
+    """TOML 数字取值：bool 是 int 的子类但不算数字，NaN 也拒绝。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if number == number else None
+    return None
+
+
+def bounded_value(value: object, maximum: float) -> float | None:
+    """BoundedNumber 的单值版本：非数字、负数、越界、NaN 都返回 None。"""
+    number = numeric_value(value)
+    if number is None or number < 0.0 or number > maximum:
+        return None
+    return number
+
+
 def bounded_number(table: dict, key: str, maximum: float) -> float | None:
     """对应 BoundedNumber：缺省 0.0；越界/类型错返回 None（C++ 返回 -1 表示非法）。"""
     if key not in table:
         return 0.0
+    return bounded_value(table[key], maximum)
+
+
+def read_slice_array(
+    table: dict, key: str, maximum: float = 500.0
+) -> tuple[str, list[float]]:
+    """对应 border_image 的 slice_dip / stretch_dip / width_dip。
+
+    返回 (状态, 值)，状态取自：
+      "absent"   没写这个键
+      "not-list" 写了但不是数组（C++ 里只有 slice_dip 会因此报错，另两个被静默忽略）
+      "shape"    数组长度不是 1、2 或 4
+      "value"    数组里有没有 0~maximum 之外的值
+      "ok"       合法
+    """
+    if key not in table:
+        return "absent", []
     value = table[key]
-    if isinstance(value, bool):  # bool 是 int 的子类，TOML 的 true 不能当数字用
-        return None
-    if isinstance(value, (int, float)):
-        value = float(value)
-        if value == value and 0.0 <= value <= maximum:  # NaN 与越界同样拒绝
-            return value
-    return None
+    if not isinstance(value, list):
+        return "not-list", []
+    if len(value) not in (1, 2, 4):
+        return "shape", []
+    out: list[float] = []
+    for item in value:
+        number = bounded_value(item, maximum)
+        if number is None:
+            return "value", []
+        out.append(number)
+    return "ok", out
 
 
 def read_optional_bounded(table: dict, key: str, maximum: float) -> bool:
@@ -374,9 +452,9 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version != 1
+        or schema_version not in (1, 2)
     ):
-        errors.append("仅支持 schema_version 1")
+        errors.append("仅支持 schema_version 1 或 2")
         return errors, warnings
 
     # manifest 基本信息：id 必须与目录名一致，base 必须是内置皮肤之一。
@@ -501,6 +579,122 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             errors.append("candidate_window.background.opacity 超出范围")
             return errors, warnings
 
+    # v2 专有字段：只在 schema_version = 2 时被解析。
+    border_image_image: str | None = None
+    decoration_images: list[str] = []
+    line_gap_given = False
+    border_image_fill_off = False
+    z_index_given = False
+    if schema_version >= 2:
+        if "border_image" in window:
+            border_image = window["border_image"]
+            if not isinstance(border_image, dict) or "source" not in border_image:
+                errors.append("candidate_window.border_image.source 无效")
+                return errors, warnings
+            source_ok, border_image_image = read_resource(border_image, "source")
+            if not source_ok:
+                errors.append("candidate_window.border_image.source 无效")
+                return errors, warnings
+            for key in ("slice_dip", "stretch_dip", "width_dip"):
+                state, _ = read_slice_array(border_image, key)
+                if state in ("absent", "ok"):
+                    continue
+                if state == "not-list":
+                    # C++ 只把 slice_dip 的形状当错误，另外两个不是数组时静默忽略。
+                    if key == "slice_dip":
+                        errors.append(
+                            "candidate_window.border_image.slice_dip 必须包含 1、2 或 4 个数值"
+                        )
+                        return errors, warnings
+                    warnings.append(
+                        f"candidate_window.border_image.{key} 不是数组，已被 Server 静默忽略"
+                    )
+                    continue
+                if state == "shape":
+                    errors.append(
+                        f"candidate_window.border_image.{key} 必须包含 1、2 或 4 个数值"
+                    )
+                    return errors, warnings
+                errors.append(f"candidate_window.border_image.{key} 超出范围")
+                return errors, warnings
+            if "fill" in border_image and not isinstance(border_image["fill"], bool):
+                warnings.append(
+                    "candidate_window.border_image.fill 不是布尔值，会被当成 true"
+                )
+            else:
+                border_image_fill_off = border_image.get("fill") is False
+
+        if "content_insets_dip" in window:
+            content_insets = window["content_insets_dip"]
+            if not isinstance(content_insets, dict):
+                errors.append("candidate_window.content_insets_dip 必须是表")
+                return errors, warnings
+            for key, maximum in CONTENT_INSET_BOUNDS.items():
+                if key in content_insets and bounded_value(
+                    content_insets[key], maximum
+                ) is None:
+                    errors.append("candidate_window.content_insets_dip 数值超出范围")
+                    return errors, warnings
+
+        line_gap_given = "line_gap_dip" in window
+        if not read_optional_bounded(window, "line_gap_dip", 100.0):
+            errors.append("candidate_window.line_gap_dip 超出范围")
+            return errors, warnings
+
+        if "outer_insets_dip" in window:
+            outer_insets = window["outer_insets_dip"]
+            if not isinstance(outer_insets, dict):
+                errors.append("candidate_window.outer_insets_dip 必须是表")
+                return errors, warnings
+            for key, maximum in OUTER_INSET_BOUNDS.items():
+                if key in outer_insets and bounded_value(
+                    outer_insets[key], maximum
+                ) is None:
+                    errors.append("candidate_window.outer_insets_dip 数值超出范围")
+                    return errors, warnings
+
+        if "decorations" in window:
+            decorations = window["decorations"]
+            if not isinstance(decorations, list):
+                errors.append("candidate_window.decorations 必须是数组")
+                return errors, warnings
+            for index, decoration in enumerate(decorations):
+                if not isinstance(decoration, dict) or "image" not in decoration:
+                    errors.append("candidate_window.decorations.image 无效")
+                    return errors, warnings
+                image_ok, free_image = read_resource(decoration, "image")
+                if not image_ok or free_image is None:
+                    errors.append("candidate_window.decorations.image 无效")
+                    return errors, warnings
+                decoration_images.append(free_image)
+                anchor_ok, _ = read_enum(decoration, "anchor", ANCHORS)
+                if not anchor_ok:
+                    errors.append("candidate_window.decorations.anchor 无效")
+                    return errors, warnings
+                # 两个尺寸都必填且 > 0：缺省按 0 处理，同样落到这条错误上。
+                width = bounded_number(decoration, "width_dip", 2000.0)
+                height = bounded_number(decoration, "height_dip", 2000.0)
+                if width is None or height is None or width <= 0.0 or height <= 0.0:
+                    errors.append(
+                        "candidate_window.decorations 的 width_dip 与 height_dip 必须大于 0"
+                    )
+                    return errors, warnings
+                for key in ("offset_x_dip", "offset_y_dip"):
+                    if key in decoration and numeric_value(decoration[key]) is None:
+                        warnings.append(
+                            f"candidate_window.decorations[{index}].{key} 不是数字，"
+                            "会被当成 0"
+                        )
+                if "z_index" in decoration:
+                    z_index = decoration["z_index"]
+                    if isinstance(z_index, bool) or not isinstance(z_index, int):
+                        warnings.append(
+                            f"candidate_window.decorations[{index}].z_index 不是整数，"
+                            "会被当成默认值 2"
+                        )
+                    else:
+                        z_index_given = True
+
     # 候选配色：[candidate] 整体不是表时 C++ 静默跳过，这里只警告。
     candidate = root.get("candidate")
     if candidate is not None and not isinstance(candidate, dict):
@@ -560,13 +754,16 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             return errors, warnings
 
     # 图片存在性：Server 在 Load 的最后统一检查。
-    for relative, label in (
-        (decoration_image, "装饰图"),
-        (background_image, "背景图"),
+    for relative, message in (
+        (decoration_image, "找不到 candidate_window.decoration.image 文件"),
+        (background_image, "找不到 candidate_window.background.image 文件"),
+        (border_image_image, "找不到 candidate_window.border_image.source 文件"),
     ):
         if relative and not (package_dir / relative).is_file():
-            field = "decoration" if label == "装饰图" else "background"
-            errors.append(f"找不到 candidate_window.{field}.image 文件")
+            errors.append(message)
+    for relative in decoration_images:
+        if not (package_dir / relative).is_file():
+            errors.append("找不到 candidate_window.decorations.image 文件")
     if errors:
         return errors, warnings
 
@@ -679,10 +876,72 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             f"数据目录 skins\\default\\{base}\\skin.toml，出厂为 "
             f"{'true' if inherited else 'false'}）"
         )
+    # v2 字段与两个后端的差异：Server 不报错，但很容易「装了和预览不一样」。
+    if schema_version == 1:
+        present = [key for key in V2_WINDOW_KEYS if key in window]
+        if present:
+            warnings.append(
+                "[candidate_window] 里的 "
+                + " / ".join(present)
+                + " 是 v2 专有字段，schema_version = 1 时不会被解析（不报错也不生效）；"
+                "要用它们就把 schema_version 改成 2"
+            )
+    else:
+        if not any(key in window for key in V2_WINDOW_KEYS):
+            warnings.append(
+                "schema_version = 2 但没用任何 v2 字段（border_image / content_insets_dip / "
+                "line_gap_dip / outer_insets_dip / decorations），效果与 v1 完全一样"
+            )
+        if border_image_image:
+            warnings.append(
+                "九宫格面板在原生 D2D 后端只是画在卡片底色之上、描边之下，并被卡片圆角裁剪，"
+                "它也不处理 width_dip 与 fill = false（WebView2 会把这些清成透明、圆角归零）；"
+                "两边都要贴合建议同时写 surface 透明色、corner_radius_dip = 0、border_width_dip = 0"
+            )
+            if border_image_fill_off:
+                warnings.append(
+                    "border_image.fill = false 只在 WebView2 生效，D2D 仍会画九宫格中心区"
+                )
+            if background_image:
+                warnings.append(
+                    "同时写了 background.image 与 border_image：D2D 只画九宫格（背景图被跳过），"
+                    "WebView2 两张都画；要两端一致就只留一个"
+                )
+        if z_index_given:
+            warnings.append(
+                "decorations.z_index 只在 WebView2 生效；D2D 忽略它，按声明顺序把挂件画在卡片之上"
+            )
+        if line_gap_given:
+            warnings.append(
+                "line_gap_dip 在 WebView2 只加在预编辑行下方，D2D 则设成 body 全部子元素的间距"
+                "（竖排时候选列表与翻页栏之间也会被拉开）"
+            )
+        if decoration_images and "outer_insets_dip" not in window:
+            warnings.append(
+                "有 decorations 却没写 outer_insets_dip：挂到卡片外沿的挂件会被窗口边界裁掉"
+            )
+        if "outer_insets_dip" in window and not decoration_images:
+            warnings.append(
+                "写了 outer_insets_dip 却没有 decorations：窗口会四周多留空白，但没有挂件用上它"
+            )
     if decoration_image:
         check_image_file(package_dir, decoration_image, "装饰图", warnings)
     if background_image:
         check_image_file(package_dir, background_image, "背景图", warnings)
+    if border_image_image:
+        check_image_file(package_dir, border_image_image, "九宫格面板图", warnings)
+    for relative in decoration_images:
+        check_image_file(package_dir, relative, "挂件图", warnings)
+        if Path(relative).suffix.lower() in ANIMATED_SUFFIXES:
+            warnings.append(
+                f"挂件图 {relative} 是动图（GIF/WebP/APNG）：只在 WebView2 会动，"
+                "D2D 只画第一帧"
+            )
+    if decoration_images:
+        warnings.append(
+            "挂件盒子与图片比例不一致时，WebView2 按 contain 保持比例留白，D2D 会拉伸变形；"
+            "width_dip / height_dip 请按图片宽高比给"
+        )
     if decoration_image and background_image:
         warnings.append(
             "同时有装饰图和卡片背景图：两者叠加后容易糊在一起，建议背景图的 opacity 压到 0.5 以下"

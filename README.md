@@ -107,7 +107,7 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 
 - 退出码 **0** = 通过，可以装
 - **错误** = Server 会直接拒收这个包
-- **警告** = 能装但可能不符合预期（配色没写全、颜色格式不认识、写了已废弃字段）
+- **警告** = 能装但可能不符合预期（配色没写全、颜色格式不认识、写了已废弃字段、v2 字段写在 `schema_version = 1` 里、v2 能力在两个后端表现不同）
 
 传 `skins` 根目录则一次校验所有子目录（自动跳过 `default` 和 `*.bak`）。需要 Python 3.11+，只用标准库 `tomllib`，无第三方依赖。
 
@@ -117,21 +117,22 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 
 | 能改 | 参数 |
 |---|---|
-| 候选窗配色：基础 8 色 + 细分配色 9 项 + 选中竖条开关 | `[candidate.dark]` / `[candidate.light]` 的 17 个颜色键 + `show_selected_bar` |
+| 候选窗配色：基础 8 色 + 细分配色 9 项 + 翻译细分 4 项 + 选中竖条开关 | `[candidate.dark]` / `[candidate.light]` 的 21 个颜色键 + `show_selected_bar` |
 | 候选窗右键菜单配色 | `[candidate.dark.menu]` / `[candidate.light.menu]` |
 | 外框圆角 / 线宽 / 高亮圆角 / 阴影 / 最小宽度 | `candidate_window.corner_radius_dip`、`border_width_dip`、`item_corner_radius_dip`、`shadow`、`min_width_dip` |
 | 候选字体族（**不是字号**） | `candidate_window.font_family` |
 | 卡片内背景图 / 卡片上方装饰图 | `candidate_window.background` / `candidate_window.decoration` |
 | 翻页箭头 | `candidate_window.page_arrows` |
 | 悬浮工具栏配色与圆角 | `[toolbar]` / `[toolbar.dark]` / `[toolbar.light]` |
+| **v2（`schema_version = 2`）**：整块面板贴图（九宫格）、面板内安全内边距、行距、卡片外立绘挂件（多层/可动图）、卡片外留白 | `candidate_window.border_image`、`content_insets_dip`、`line_gap_dip`、`[[candidate_window.decorations]]`、`outer_insets_dip` |
 
 | 做不到 | 说明 |
 |---|---|
 | 自定义 CSS / HTML / JavaScript | 外部皮肤**不接受任何 CSS 或脚本**，塞进去不会有任何效果 |
-| 字号、行距、内边距、候选框留白 | 不属于皮肤参数，跟 `base` 走；字号由设置页的「候选字号」决定 |
+| 字号、行内边距、候选框留白 | 字号由设置页的「候选字号」决定；行内边距与留白跟 `base` 走（v2 的 `content_insets_dip` 只能改四边的安全内边距） |
 | 工具栏尺寸、加按钮、改图标字形 | `[toolbar]` 只能改 6 个颜色 + 圆角 |
 | 菜单里加自定义条目 | 菜单条目是输入法内置的，皮肤只改配色 |
-| 动画、毛玻璃、透明窗口、全屏背景 | 不在参数里 |
+| 毛玻璃、透明窗口、全屏背景 | 不在参数里；动画也不是通用能力（只有 v2 的卡外挂件在 WebView2 下能用动图） |
 | 改内置皮肤本身的外观 | 那是水杉仓库的源码，不是皮肤包 |
 
 ### `base` 选哪个
@@ -195,6 +196,8 @@ preedit_divider = "#6B69D6"
 ```
 
 完整模板、全部字段的取值范围和每个硬性约束见 [`skills/metasequoia-skin/SKILL.md`](skills/metasequoia-skin/SKILL.md)。
+
+**要整块贴图面板或卡片外立绘**：把 `schema_version` 改成 `2`，用 v2 追加字段（`border_image` / `content_insets_dip` / `line_gap_dip` / `decorations` / `outer_insets_dip`）。v2 字段只在 `schema_version = 2` 时被解析，写在 v1 里不报错也不生效。v2 在原生 D2D 后端是降级实现（`border_image` 不清底色描边、不处理 `width_dip` / `fill = false`，挂件静态、忽略 `z_index`），要贴图原样呈现得用 `appearance.ui_backend = "webview2"`。细节见 SKILL.md 的 v2 小节。
 
 ### 三条容易踩的规则
 
