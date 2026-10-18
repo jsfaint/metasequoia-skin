@@ -84,7 +84,7 @@ opencode 里如果技能被权限拦住，在 `opencode.json` 放行：
 
 改完 `skin.toml` 或图片后，点一次「刷新皮肤」就全量重载，**不需要重启输入法服务**。
 
-**只想改内置皮肤的翻页箭头**：不走外部皮肤这套流程。编辑 `<skins 目录>\default\<内置名>\skin.toml` 里的 `[candidate_window] page_arrows`，然后点「刷新皮肤」。只有 `id`、`name`、`schema_version`、`page_arrows` 会被读，其余字段写了不生效。
+**只想改内置皮肤的翻页箭头或 `fit_content`**：不走外部皮肤这套流程。编辑 `<skins 目录>\default\<内置名>\skin.toml` 里 `[candidate_window]` 的 `page_arrows` 与 `fit_content`，然后点「刷新皮肤」。只有 `id`、`name`、`schema_version`、`page_arrows`、`fit_content` 会被读，其余字段写了不生效。
 
 **设置页根本不显示这个皮肤**：对照 [SKILL.md 的故障排查表](skills/metasequoia-skin/SKILL.md)。最常见的是目录层级错了、`id` 与目录名不一致、目录名带了大写或中文。
 
@@ -107,7 +107,7 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 
 - 退出码 **0** = 通过，可以装
 - **错误** = Server 会直接拒收这个包
-- **警告** = 能装但可能不符合预期（配色没写全、颜色格式不认识、写了已废弃字段、v2 字段写在 `schema_version = 1` 里、v2 能力在两个后端表现不同）
+- **警告** = 能装但可能不符合预期（配色没写全、颜色格式不认识、写了已废弃字段、v2 字段写在 `schema_version = 1` 里、写了 `schema_version = 2` 却没配 `base = "canvas"`、固定明暗的基底把 `themes` 收窄、动图超过 64 MB）
 
 传 `skins` 根目录则一次校验所有子目录（自动跳过 `default` 和 `*.bak`）。需要 Python 3.11+，只用标准库 `tomllib`，无第三方依赖。
 
@@ -120,11 +120,13 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 | 候选窗配色：基础 8 色 + 细分配色 9 项 + 翻译细分 4 项 + 选中竖条开关 | `[candidate.dark]` / `[candidate.light]` 的 21 个颜色键 + `show_selected_bar` |
 | 候选窗右键菜单配色 | `[candidate.dark.menu]` / `[candidate.light.menu]` |
 | 外框圆角 / 线宽 / 高亮圆角 / 阴影 / 最小宽度 | `candidate_window.corner_radius_dip`、`border_width_dip`、`item_corner_radius_dip`、`shadow`、`min_width_dip` |
+| 卡片背后的系统材质 | `candidate_window.backdrop`（`none` / `acrylic` / `mica`） |
 | 候选字体族（**不是字号**） | `candidate_window.font_family` |
+| 卡片严格按文字宽度收紧 | `candidate_window.fit_content`（`true` / `false`） |
 | 卡片内背景图 / 卡片上方装饰图 | `candidate_window.background` / `candidate_window.decoration` |
 | 翻页箭头 | `candidate_window.page_arrows` |
 | 悬浮工具栏配色与圆角 | `[toolbar]` / `[toolbar.dark]` / `[toolbar.light]` |
-| **v2（`schema_version = 2`）**：整块面板贴图（九宫格）、面板内安全内边距、行距、卡片外立绘挂件（多层/可动图）、卡片外留白 | `candidate_window.border_image`、`content_insets_dip`、`line_gap_dip`、`[[candidate_window.decorations]]`、`outer_insets_dip` |
+| **v2（`schema_version = 2`，`base = "canvas"`）**：整块面板贴图（九宫格，浅色主题可换一张）、面板内安全内边距、行距、卡片外立绘挂件（多层）、卡片外留白、动图原生播放 | `candidate_window.border_image`（`source` / `light_source`）、`content_insets_dip`、`line_gap_dip`、`[[candidate_window.decorations]]`、`outer_insets_dip` |
 
 | 做不到 | 说明 |
 |---|---|
@@ -132,8 +134,8 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 | 字号、行内边距、候选框留白 | 字号由设置页的「候选字号」决定；行内边距与留白跟 `base` 走（v2 的 `content_insets_dip` 只能改四边的安全内边距） |
 | 工具栏尺寸、加按钮、改图标字形 | `[toolbar]` 只能改 6 个颜色 + 圆角 |
 | 菜单里加自定义条目 | 菜单条目是输入法内置的，皮肤只改配色 |
-| 毛玻璃、透明窗口、全屏背景 | 不在参数里；动画也不是通用能力（只有 v2 的卡外挂件在 WebView2 下能用动图） |
-| 改内置皮肤本身的外观 | 那是水杉仓库的源码，不是皮肤包 |
+| 全屏背景、窗口本身的其它透明特效 | 不在参数里。卡片背后的系统材质只有 `backdrop` 这一种（亚克力 / 云母，见上表） |
+| 改内置皮肤本身的外观 | 那是水杉仓库的源码，不是皮肤包（内置皮肤只有 `page_arrows`、`fit_content` 两个开关可改） |
 
 ### `base` 选哪个
 
@@ -149,6 +151,20 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 | `microsoft` | 仿微软拼音，紧凑、三角翻页箭头 | 8 / 1 / 4 | 灰块 + 竖条在块内 | `#E183D9` / `#E183D9` |
 
 `microsoft` 唯一自带 `page_arrows = true`，其余五个都是关的。选它做 `base` 又不写 `page_arrows`，用户会莫名多出翻页箭头。
+
+除了这六个内置皮肤，`base` 还能写水杉与 msime 共用的**共享基底**，以及只给 v2 用的**全贴图地基**：
+
+| base | 观感 | 明暗 |
+|---|---|---|
+| `system` | 跟随宿主，没有自己的调色板 | 跟随系统 |
+| `shuishan` | 水杉绿：深色底 + 浅绿强调 | 固定深色 |
+| `light` | Windows 浅色：白底 + 蓝强调 | 固定浅色 |
+| `paper` | 纸白：暖白底 + 绿强调 | 固定浅色 |
+| `night` | 夜蓝：深蓝底 + 青绿强调 | 固定深色 |
+| `ink` | 墨黑：黑底 + 白强调 | 固定深色 |
+| `canvas` | 全贴图地基，**只给 v2 用**，面板外观全交给贴图 | 看你写哪套 |
+
+共享基底加载后一律按 `fluent` 的结构绘制，只补上自己的基础配色，**没写到的键走的还是 `fluent` 的令牌**。**固定明暗的基底会把 `[supports] themes` 收窄**成它自己那一侧（`shuishan` / `night` / `ink` 收成 `dark`，`light` / `paper` 收成 `light`）：声明里没有对应明暗时收窄成空，两种明暗都会回退 `fluent`；声明了另一侧也只是摆设，那一侧的配色不会生效。`system` 不收窄。`canvas` 不能单独在设置页选用，`schema_version = 1` 用它会被直接拒收。
 
 ## 最短的 skin.toml
 
@@ -197,13 +213,15 @@ preedit_divider = "#6B69D6"
 
 完整模板、全部字段的取值范围和每个硬性约束见 [`skills/metasequoia-skin/SKILL.md`](skills/metasequoia-skin/SKILL.md)。
 
-**要整块贴图面板或卡片外立绘**：把 `schema_version` 改成 `2`，用 v2 追加字段（`border_image` / `content_insets_dip` / `line_gap_dip` / `decorations` / `outer_insets_dip`）。v2 字段只在 `schema_version = 2` 时被解析，写在 v1 里不报错也不生效。v2 在原生 D2D 后端是降级实现（`border_image` 不清底色描边、不处理 `width_dip` / `fill = false`，挂件静态、忽略 `z_index`），要贴图原样呈现得用 `appearance.ui_backend = "webview2"`。细节见 SKILL.md 的 v2 小节。
+**要整块贴图面板或卡片外立绘**：把 `schema_version` 改成 `2`，并**必须同时把 `base` 改成 `"canvas"`**，再用 v2 追加字段（`border_image` / `content_insets_dip` / `line_gap_dip` / `decorations` / `outer_insets_dip`）。v2 字段只在 `schema_version = 2` 且 `base = "canvas"` 时被解析；写了 `2` 却用别的基底，包仍能装也能用，但按 v1 加载、v2 字段全部被忽略（设置页诊断里会多一条说明）。反过来 `schema_version = 1` 配 `canvas` 会被直接拒收。细节见 SKILL.md 的 v2 小节。
 
-### 三条容易踩的规则
+### 五条容易踩的规则
 
-1. **十六进制必须带 `#`**，不透明度在末尾（`#RRGGBBAA`，不是 `#AARRGGBB`）。`绿色`、`lightblue`、`hsl(...)` 会被 Server 拒收整个包。
-2. **`dark` 和 `light` 都要写全**。同一个键没写时，原生 Direct2D 后端走 `base` 的 D2D 令牌，WebView2 后端走 `base` 的 CSS，两边历史遗留有细微差别。
+1. **十六进制必须带 `#`**，不透明度在末尾（`#RRGGBBAA`，不是 `#AARRGGBB`）。颜色值只放行纯 ASCII 白名单：含**非 ASCII 字符**（`绿色`）或白名单外符号（`;`、`{}`、引号）的写法会被 Server 拒收整个包；`lightblue`、`hsl(...)` 这类纯 ASCII 写法能装能加载，只是渲染认不出来、会静默退回默认色（`check_skin.py` 会为此报警告）。
+2. **`dark` 和 `light` 都要写全**。同一个键没写时走 `base` 的令牌，而 `base` 自己还有一套，漏写就会在某些 `base` 下和预期不一样。
 3. **设置页的「候选文字颜色」压过** `text` / `candidate_text` / `preedit_text`，别靠这三个键定候选文字主色。
+4. **v2 必须 `base = "canvas"`**。`schema_version = 2` 只是声明，真正的地基是 `canvas`；写了 `2` 却用别的基底，整包仍能装也能用，但按 v1 加载、v2 字段全部被忽略。反过来 `schema_version = 1` 配 `canvas` 会被直接拒收。
+5. **`backdrop`（亚克力 / 云母）依赖系统「透明效果」**，关掉或不支持（低于 Windows 10 1903，云母还要 Windows 11）时会退回不透明底色；同一张皮肤写了 `border_image` 时不生效——面板贴图和系统材质只能留一种。
 
 ## 目录结构
 

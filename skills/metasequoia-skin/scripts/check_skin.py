@@ -4,9 +4,9 @@
 规则逐条对齐 Server 的解析实现 server/src/skin/candidate_skin_catalog.cpp（CandidateSkinCatalog::Load），
 错误文案也沿用同一套中文，方便和设置页「皮肤 → 外部皮肤」底部的诊断信息对照。
 
-支持 schema_version 1（通用卡片皮肤）与 2（追加九宫格贴图面板、自由挂件、面板内安全内边距、
-行距、面板外留白）。v2 字段只在 schema_version = 2 时被解析，写在 v1 里会被静默忽略——这一条
-不报错，所以这里额外给一条警告。
+支持 schema_version 1（通用卡片皮肤）与 2（canvas 全贴图基底：九宫格面板、自由挂件、面板内安全内边距、
+行距、面板外留白）。v2 必须以 base = "canvas" 为基底：写了 2 而 base 不是 canvas 的皮肤按 v1 加载，
+其中的 v2 字段（连同其中的错误）被忽略，只多一条警告；schema_version = 1 用 canvas 直接报错。
 
 用法：
     uv run check_skin.py <皮肤包目录>      # 目录里应有 skin.toml
@@ -35,8 +35,14 @@ BUILTIN_IDS = {
 }
 # kDefaultSkinsFolder：内置皮肤的设置清单目录，Scan 跳过它，也不能被当成外部皮肤加载。
 RESERVED_IDS = {"default"}
-# kDefaultPageArrows / skins/default/<base>/skin.toml：内置皮肤翻页箭头的出厂值。
+# kDefaultPageArrows / skins/default/<base>/skin.toml：内置皮肤翻页箭头的出厂值（microsoft 打开，
+# 其余关闭；canvas 的出厂值取 fluent）。fit_content 出厂一律为 false。
 DEFAULT_PAGE_ARROWS = {"microsoft": True}
+# 共享基底来自 msime 的固定主题，按 fluent 的结构绘制并补上基底配色；system 跟随宿主没有调色板。
+SHARED_BASES = {"system", "shuishan", "light", "paper", "night", "ink"}
+# 全贴图基底：只用于 v2，面板外观完全由九宫格与挂件决定。
+CANVAS_BASE = "canvas"
+ALL_BASES = BUILTIN_IDS | SHARED_BASES | {CANVAS_BASE}
 # 这两个 base 的基础样式是 border: none，只写线宽看不到框，必须同时给 border 颜色。
 NO_FRAME_BASES = {"willow_green", "autumn_osmanthus"}
 
@@ -68,8 +74,17 @@ V2_WINDOW_KEYS = (
     "outer_insets_dip",
     "decorations",
 )
-# 动图只在 WebView2 会动（D2D 用 WIC 取首帧，静态）。
-ANIMATED_SUFFIXES = (".gif", ".webp", ".apng")
+# 动图扩展名：IsAnimatableImagePath。v2 的 border_image 与挂件只接受这四种。
+ANIMATABLE_SUFFIXES = (".png", ".apng", ".gif", ".webp")
+# 固定明暗的共享基底（SharedBase 表）：加载时 themes 被收窄成对应明暗（全不支持时收窄成空），
+# base 同时被改写成 fluent；system 跟随宿主，不收窄。
+FIXED_THEME_SHARED_BASES = {
+    "shuishan": "dark",
+    "light": "light",
+    "paper": "light",
+    "night": "dark",
+    "ink": "dark",
+}
 
 # ReadColors 逐键检查的基础配色键，值上限 80 字节。
 BASE_COLOR_KEYS = (
@@ -96,7 +111,7 @@ DETAIL_COLOR_KEYS = (
 )
 # 翻译里的词性标记（`.cand-translation .cand-pos`）与义项分隔符（`.cand-sep`）可以单独配色，
 # 选中行另有四个对应的 selected_ 键；都不写时与 translation 同色。
-# 依据：数据目录 html/webview2/candwnd/README.md，上游是
+# 依据：examples/skin-examples/schema/README.md 的颜色格式表，上游是
 # server/src/window/candidate_presenter.cpp 的 SetTranslationColors / SetSelectedTranslationColors。
 TRANSLATION_RUN_COLOR_KEYS = (
     "translation_pos",
@@ -113,7 +128,9 @@ TOOLBAR_COLOR_KEYS = ("background", "border", "handle", "divider", "icon", "hove
 # ReadCssColor 只放行颜色值会用到的字符，挡住 `;`、`{}` 之类能跳出 CSS 声明的写法。
 CSS_COLOR_CHARS = set(string.ascii_letters + string.digits + "#(),.% -/")
 
-EMBED_MAX_BYTES = 1500 * 1024  # windows_webview2_skin.cpp:kMaxEmbedBytes
+# 动图文件上限：ui/include/msimeui/AnimatedImage.h 的 maxFileBytes，与 README 的 64MB 帧预算同源。
+# 超过它的图片按静态首帧显示（皮肤仍可用，所以只给警告）。
+ANIMATED_FILE_LIMIT_BYTES = 64 * 1024 * 1024
 
 # IsSafeId：首字符 isalnum，其余 islower / isdigit / '.' / '_' / '-'，总长 ≤ 64。
 ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
@@ -209,8 +226,8 @@ def read_slice_array(
     """对应 border_image 的 slice_dip / stretch_dip / width_dip。
 
     返回 (状态, 值)，状态取自：
-      "absent"   没写这个键
-      "not-list" 写了但不是数组（C++ 里只有 slice_dip 会因此报错，另两个被静默忽略）
+      "absent"   没写这个键（三个键里只有它不算错，slice_dip 缺了会报错）
+      "not-list" 写了但不是数组（三个键都会因此报错）
       "shape"    数组长度不是 1、2 或 4
       "value"    数组里有没有 0~maximum 之外的值
       "ok"       合法
@@ -252,6 +269,18 @@ def is_safe_relative_resource(name: str) -> bool:
     if not RESOURCE_PATTERN.match(name):
         return False
     return all(part not in ("", ".", "..") for part in name.split("/"))
+
+
+def is_animatable_image_path(name: str) -> bool:
+    """对应 IsAnimatableImagePath：取整个路径最后一个 '.'，其后不能再有 '/'。
+
+    不能用 Path().suffix：末段以点开头（如 ".png"）时 pathlib 认为没有后缀，
+    而 C++ 会取到 ".png" 并放行。
+    """
+    dot = name.rfind(".")
+    if dot == -1 or "/" in name[dot:]:
+        return False
+    return name[dot:].lower() in ANIMATABLE_SUFFIXES
 
 
 def read_resource(table: dict, key: str) -> tuple[bool, str | None]:
@@ -301,6 +330,9 @@ def read_candidate_colors(table: object) -> tuple[bool, dict[str, object], bool]
         for key in MENU_COLOR_KEYS:
             if key in menu and not read_css_color(menu, key)[0]:
                 return False, {}, False
+    for key in ("backdrop_opacity", "backdrop_luminosity"):
+        if key in table and bounded_value(table[key], 1.0) is None:
+            return False, {}, False
     return (
         True,
         {key: table[key] for key in CANDIDATE_COLOR_KEYS if key in table},
@@ -404,15 +436,10 @@ def check_image_file(
         # 存在性本身是错误，已经由调用方报出。
         return
     size = image.stat().st_size
-    if size > EMBED_MAX_BYTES:
+    if is_animatable_image_path(relative) and size > ANIMATED_FILE_LIMIT_BYTES:
         warnings.append(
-            f"{label} {relative} 有 {size // 1024}KB，超过 1500KB 的内联上限，"
-            "WebView2 端会改走虚拟主机加载（更慢）"
-        )
-    if image.suffix.lower() not in (".png", ".jpg", ".jpeg", ".bmp", ".gif"):
-        warnings.append(
-            f"{label} {relative} 是 {image.suffix or '（无扩展名）'} 格式，原生后端靠 Windows 图片解码器加载，"
-            "webp/svg 在部分 Windows 上不支持，建议用 png"
+            f"{label} {relative} 有 {size // (1024 * 1024)}MB，超过 64MB 的动图上限，"
+            "只会显示第一帧（静态图）"
         )
 
 
@@ -438,7 +465,8 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
     try:
         root = tomllib.loads(manifest.read_text(encoding="utf-8"))
     except UnicodeDecodeError:
-        errors.append("skin.toml 不是有效的 TOML manifest")
+        # C++ 侧无效 UTF-8 走 toml::parse 的 parse_error，与其他解析失败同一条错误。
+        errors.append("缺少或无法解析 skin.toml")
         return errors, warnings
     except tomllib.TOMLDecodeError:
         errors.append("缺少或无法解析 skin.toml")
@@ -468,9 +496,23 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
     desc_ok, desc = read_string(root, "description", 500, False)
     for ok in (id_ok, name_ok, version_ok, base_ok, author_ok, desc_ok):
         info_ok = info_ok and ok
-    if not info_ok or skin_id != folder or base not in BUILTIN_IDS:
+    if not info_ok or skin_id != folder or base not in ALL_BASES:
         errors.append("manifest 的基本信息无效")
         return errors, warnings
+
+    # canvas 没有自己的面板，只有 v2 的九宫格与挂件能让它可见；v1 皮肤用它只会得到一张透明卡片。
+    if base == CANVAS_BASE and schema_version < 2:
+        errors.append('base = "canvas" 只能用于 schema_version = 2 的皮肤')
+        return errors, warnings
+    # v2 字段只在 canvas 上生效：其他 base 的卡片几何与九宫格/挂件互相打架。这种皮肤仍可使用，按 v1 处理。
+    downgraded_to_v1 = False
+    if schema_version >= 2 and base != CANVAS_BASE:
+        warnings.append(
+            'schema_version = 2 需要 base = "canvas"，已按 schema_version = 1 '
+            "加载，九宫格、挂件等 v2 字段被忽略"
+        )
+        schema_version = 1
+        downgraded_to_v1 = True
 
     # 已被移除的字段：Server 静默忽略，写了只会让人以为生效了。
     for dead in ("preview", "toolbar_stylesheet"):
@@ -524,6 +566,14 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
     if not shadow_ok:
         errors.append("candidate_window.shadow 只能是 none、soft 或 strong")
         return errors, warnings
+    backdrop_ok, _ = read_enum(window, "backdrop", ("none", "acrylic", "mica"))
+    if not backdrop_ok:
+        errors.append("candidate_window.backdrop 只能是 none、acrylic 或 mica")
+        return errors, warnings
+    if not read_optional_bool(window, "fit_content"):
+        errors.append("candidate_window.fit_content 必须是 true 或 false")
+        return errors, warnings
+    fit_content_given = "fit_content" in window
     font_family: str | None = None
     if "font_family" in window:
         font_ok, font_family = read_string(window, "font_family", 64, True)
@@ -579,50 +629,61 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             errors.append("candidate_window.background.opacity 超出范围")
             return errors, warnings
 
-    # v2 专有字段：只在 schema_version = 2 时被解析。
+    # v2 专有字段：只在 schema_version = 2（即 base = canvas）时被解析。
     border_image_image: str | None = None
+    border_image_light: str | None = None
     decoration_images: list[str] = []
-    line_gap_given = False
-    border_image_fill_off = False
-    z_index_given = False
     if schema_version >= 2:
         if "border_image" in window:
             border_image = window["border_image"]
             if not isinstance(border_image, dict) or "source" not in border_image:
-                errors.append("candidate_window.border_image.source 无效")
+                errors.append(
+                    "candidate_window.border_image.source 无效（需为 .png、.apng、.gif 或 .webp）"
+                )
                 return errors, warnings
             source_ok, border_image_image = read_resource(border_image, "source")
-            if not source_ok:
-                errors.append("candidate_window.border_image.source 无效")
+            if (
+                not source_ok
+                or border_image_image is None
+                or not is_animatable_image_path(border_image_image)
+            ):
+                errors.append(
+                    "candidate_window.border_image.source 无效（需为 .png、.apng、.gif 或 .webp）"
+                )
                 return errors, warnings
-            for key in ("slice_dip", "stretch_dip", "width_dip"):
-                state, _ = read_slice_array(border_image, key)
-                if state in ("absent", "ok"):
-                    continue
-                if state == "not-list":
-                    # C++ 只把 slice_dip 的形状当错误，另外两个不是数组时静默忽略。
-                    if key == "slice_dip":
-                        errors.append(
-                            "candidate_window.border_image.slice_dip 必须包含 1、2 或 4 个数值"
-                        )
-                        return errors, warnings
-                    warnings.append(
-                        f"candidate_window.border_image.{key} 不是数组，已被 Server 静默忽略"
-                    )
-                    continue
-                if state == "shape":
+            if "light_source" in border_image:
+                light_ok, border_image_light = read_resource(
+                    border_image, "light_source"
+                )
+                if (
+                    not light_ok
+                    or border_image_light is None
+                    or not is_animatable_image_path(border_image_light)
+                ):
                     errors.append(
-                        f"candidate_window.border_image.{key} 必须包含 1、2 或 4 个数值"
+                        "candidate_window.border_image.light_source 无效"
+                        "（需为 .png、.apng、.gif 或 .webp）"
                     )
                     return errors, warnings
-                errors.append(f"candidate_window.border_image.{key} 超出范围")
-                return errors, warnings
-            if "fill" in border_image and not isinstance(border_image["fill"], bool):
-                warnings.append(
-                    "candidate_window.border_image.fill 不是布尔值，会被当成 true"
+            # slice_dip 是必填的：没有它九宫格无从切起；形状、范围不对也落到同一条错误。
+            state, _ = read_slice_array(border_image, "slice_dip")
+            if state != "ok":
+                errors.append(
+                    "candidate_window.border_image.slice_dip 必须是 1、2 或 4 个 0–500 的数值"
                 )
-            else:
-                border_image_fill_off = border_image.get("fill") is False
+                return errors, warnings
+            for key in ("stretch_dip", "width_dip"):
+                state, _ = read_slice_array(border_image, key)
+                if state == "absent":
+                    continue
+                if state in ("not-list", "shape", "value"):
+                    errors.append(
+                        f"candidate_window.border_image.{key} 必须是 1、2 或 4 个 0–500 的数值"
+                    )
+                    return errors, warnings
+            if "fill" in border_image and not isinstance(border_image["fill"], bool):
+                errors.append("candidate_window.border_image.fill 必须是 true 或 false")
+                return errors, warnings
 
         if "content_insets_dip" in window:
             content_insets = window["content_insets_dip"]
@@ -630,14 +691,16 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                 errors.append("candidate_window.content_insets_dip 必须是表")
                 return errors, warnings
             for key, maximum in CONTENT_INSET_BOUNDS.items():
-                if key in content_insets and bounded_value(
-                    content_insets[key], maximum
-                ) is None:
+                if (
+                    key in content_insets
+                    and bounded_value(content_insets[key], maximum) is None
+                ):
                     errors.append("candidate_window.content_insets_dip 数值超出范围")
                     return errors, warnings
 
-        line_gap_given = "line_gap_dip" in window
-        if not read_optional_bounded(window, "line_gap_dip", 100.0):
+        if "line_gap_dip" in window and not read_optional_bounded(
+            window, "line_gap_dip", 100.0
+        ):
             errors.append("candidate_window.line_gap_dip 超出范围")
             return errors, warnings
 
@@ -647,9 +710,10 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                 errors.append("candidate_window.outer_insets_dip 必须是表")
                 return errors, warnings
             for key, maximum in OUTER_INSET_BOUNDS.items():
-                if key in outer_insets and bounded_value(
-                    outer_insets[key], maximum
-                ) is None:
+                if (
+                    key in outer_insets
+                    and bounded_value(outer_insets[key], maximum) is None
+                ):
                     errors.append("candidate_window.outer_insets_dip 数值超出范围")
                     return errors, warnings
 
@@ -658,13 +722,24 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             if not isinstance(decorations, list):
                 errors.append("candidate_window.decorations 必须是数组")
                 return errors, warnings
-            for index, decoration in enumerate(decorations):
+            if len(decorations) > 32:
+                errors.append("candidate_window.decorations 最多 32 层")
+                return errors, warnings
+            for decoration in decorations:
                 if not isinstance(decoration, dict) or "image" not in decoration:
-                    errors.append("candidate_window.decorations.image 无效")
+                    errors.append(
+                        "candidate_window.decorations.image 无效（需为 .png、.apng、.gif 或 .webp）"
+                    )
                     return errors, warnings
                 image_ok, free_image = read_resource(decoration, "image")
-                if not image_ok or free_image is None:
-                    errors.append("candidate_window.decorations.image 无效")
+                if (
+                    not image_ok
+                    or free_image is None
+                    or not is_animatable_image_path(free_image)
+                ):
+                    errors.append(
+                        "candidate_window.decorations.image 无效（需为 .png、.apng、.gif 或 .webp）"
+                    )
                     return errors, warnings
                 decoration_images.append(free_image)
                 anchor_ok, _ = read_enum(decoration, "anchor", ANCHORS)
@@ -680,20 +755,25 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                     )
                     return errors, warnings
                 for key in ("offset_x_dip", "offset_y_dip"):
-                    if key in decoration and numeric_value(decoration[key]) is None:
-                        warnings.append(
-                            f"candidate_window.decorations[{index}].{key} 不是数字，"
-                            "会被当成 0"
-                        )
+                    if key in decoration:
+                        number = numeric_value(decoration[key])
+                        if number is None or abs(number) > 2000.0:
+                            errors.append(
+                                "candidate_window.decorations 的 offset_x_dip / offset_y_dip "
+                                "必须在 -2000–2000 之间"
+                            )
+                            return errors, warnings
                 if "z_index" in decoration:
                     z_index = decoration["z_index"]
-                    if isinstance(z_index, bool) or not isinstance(z_index, int):
-                        warnings.append(
-                            f"candidate_window.decorations[{index}].z_index 不是整数，"
-                            "会被当成默认值 2"
+                    if (
+                        isinstance(z_index, bool)
+                        or not isinstance(z_index, int)
+                        or not -1000 <= z_index <= 1000
+                    ):
+                        errors.append(
+                            "candidate_window.decorations.z_index 必须是 -1000–1000 的整数"
                         )
-                    else:
-                        z_index_given = True
+                        return errors, warnings
 
     # 候选配色：[candidate] 整体不是表时 C++ 静默跳过，这里只警告。
     candidate = root.get("candidate")
@@ -758,6 +838,7 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         (decoration_image, "找不到 candidate_window.decoration.image 文件"),
         (background_image, "找不到 candidate_window.background.image 文件"),
         (border_image_image, "找不到 candidate_window.border_image.source 文件"),
+        (border_image_light, "找不到 candidate_window.border_image.light_source 文件"),
     ):
         if relative and not (package_dir / relative).is_file():
             errors.append(message)
@@ -779,9 +860,26 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         ]
         warnings.append(
             f"supports 只声明了 {'/'.join(sorted(layouts))} / {'/'.join(sorted(themes))}；"
-            f"缺少 {'、'.join(missing)} 这些组合时，设置页会标「不兼容」，"
-            "且当前布局/明暗下 WebView2 后端直接回退 fluent"
+            f"缺少 {'、'.join(missing)} 这些组合时，设置页的这张卡片会显示"
+            "「当前布局或明暗模式不受支持」并禁用开关，且当前布局/明暗下直接回退 fluent"
         )
+    # 固定明暗的共享基底在 AdaptSharedBase 里收窄 themes 并把 base 改写成 fluent：
+    # 另一明暗下的配色与声明不会生效，声明里没有固定明暗时收窄成空、处处回退 fluent。
+    fixed_theme = FIXED_THEME_SHARED_BASES.get(base)
+    if fixed_theme is not None:
+        other = "light" if fixed_theme == "dark" else "dark"
+        zh = "深" if fixed_theme == "dark" else "浅"
+        if fixed_theme not in themes:
+            warnings.append(
+                f"base = {base} 固定{zh}色明暗，themes 会被收窄成 ['{fixed_theme}']："
+                f"声明的 {'/'.join(themes)} 里没有 {fixed_theme}，收窄后没有任何可用主题，"
+                "设置页的这张卡片会显示「当前布局或明暗模式不受支持」，两种明暗都会回退 fluent"
+            )
+        elif other in themes:
+            warnings.append(
+                f"base = {base} 固定{zh}色明暗，themes 会被收窄成 ['{fixed_theme}']："
+                f"{other} 一侧的配色不会生效"
+            )
     if not author:
         warnings.append("没写 author，分享给别人时设置页只显示 id 和版本")
     if not desc:
@@ -793,8 +891,7 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         )
     if not isinstance(candidate, dict):
         warnings.append(
-            "完全没写 [candidate] 配色：颜色将按 base 走，但原生后端与 WebView2 的默认值来源不同，"
-            "换后端可能有差别。建议把 dark/light 两组配色键都显式写全"
+            "完全没写 [candidate] 配色：颜色将按 base 走；建议把 dark/light 两组配色键都显式写全"
         )
     for theme_name, bucket in (("dark", dark_colors), ("light", light_colors)):
         if isinstance(candidate, dict) and not bucket:
@@ -813,7 +910,7 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             if not looks_like_css_color(value):
                 warnings.append(
                     f"[candidate.{theme_name}].{key} = {value} 不是可识别的 CSS 颜色，"
-                    "原生后端会退回默认色；请用 #rgb / #rgba / #rrggbb / #rrggbbaa / rgb() / rgba()"
+                    "会退回默认色；请用 #rgb / #rgba / #rrggbb / #rrggbbaa / rgb() / rgba()"
                 )
             elif is_fully_transparent(value):
                 warnings.append(
@@ -833,14 +930,14 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             if not looks_like_css_color(value):
                 warnings.append(
                     f"[candidate.{theme_name}.menu].{key} = {value} 不是可识别的 CSS 颜色，"
-                    "两个后端都会退回 base 的菜单颜色"
+                    "会退回 base 的菜单颜色"
                 )
     for theme_name, bucket in (("dark", toolbar_dark), ("light", toolbar_light)):
         for key, value in bucket.items():
             if not looks_like_css_color(value):
                 warnings.append(
                     f"[toolbar.{theme_name}].{key} = {value} 不是可识别的 CSS 颜色，"
-                    "两个后端都会退回 base 的工具栏颜色"
+                    "会退回 base 的工具栏颜色"
                 )
     if corner_radius == 0.0:
         warnings.append("corner_radius_dip = 0 是直角候选框；不想要直角就别写这个键")
@@ -870,51 +967,39 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             "缺字时回落到用户字体"
         )
     if not page_arrows_given:
-        inherited = DEFAULT_PAGE_ARROWS.get(base, False)
+        # 内置皮肤出厂值读自数据目录 skins\default\<base>\skin.toml；canvas 与共享基底都取 fluent：
+        # AdaptSharedBase 会把共享基底的 base 改写成 fluent，ResolvePageArrows 拿到的是改写后的值
+        # （server/tests/src/test_candidate_skin_catalog_bases.cpp 覆盖了这条）。
+        arrows_base = "fluent" if base == CANVAS_BASE or base in SHARED_BASES else base
+        inherited = DEFAULT_PAGE_ARROWS.get(arrows_base, False)
         warnings.append(
-            "没写 page_arrows：沿用 base 的内置皮肤设置（"
-            f"数据目录 skins\\default\\{base}\\skin.toml，出厂为 "
+            "没写 page_arrows：沿用 base 的默认皮肤设置（"
+            f"数据目录 skins\\default\\{arrows_base}\\skin.toml，出厂为 "
             f"{'true' if inherited else 'false'}）"
         )
-    # v2 字段与两个后端的差异：Server 不报错，但很容易「装了和预览不一样」。
+    if not fit_content_given:
+        warnings.append(
+            "没写 fit_content：沿用 base 的默认皮肤设置（出厂为 false，"
+            "卡片垫 160 DIP 的出厂最小宽度）"
+        )
+    # v2 字段只在 canvas 上被解析；走到这里 schema_version 已按 base 修正过。
+    # 上面那条降级说明已经交代了 v2 字段被忽略，这里不再重复（也不要再劝人「改成 2」，人家本来就写了 2）。
     if schema_version == 1:
-        present = [key for key in V2_WINDOW_KEYS if key in window]
-        if present:
-            warnings.append(
-                "[candidate_window] 里的 "
-                + " / ".join(present)
-                + " 是 v2 专有字段，schema_version = 1 时不会被解析（不报错也不生效）；"
-                "要用它们就把 schema_version 改成 2"
-            )
+        if not downgraded_to_v1:
+            present = [key for key in V2_WINDOW_KEYS if key in window]
+            if present:
+                warnings.append(
+                    "[candidate_window] 里的 "
+                    + " / ".join(present)
+                    + " 是 v2 专有字段，schema_version = 1 时不会被解析（不报错也不生效）；"
+                    '要用它们就把 schema_version 改成 2 并用 base = "canvas"'
+                )
     else:
         if not any(key in window for key in V2_WINDOW_KEYS):
             warnings.append(
                 "schema_version = 2 但没用任何 v2 字段（border_image / content_insets_dip / "
-                "line_gap_dip / outer_insets_dip / decorations），效果与 v1 完全一样"
-            )
-        if border_image_image:
-            warnings.append(
-                "九宫格面板在原生 D2D 后端只是画在卡片底色之上、描边之下，并被卡片圆角裁剪，"
-                "它也不处理 width_dip 与 fill = false（WebView2 会把这些清成透明、圆角归零）；"
-                "两边都要贴合建议同时写 surface 透明色、corner_radius_dip = 0、border_width_dip = 0"
-            )
-            if border_image_fill_off:
-                warnings.append(
-                    "border_image.fill = false 只在 WebView2 生效，D2D 仍会画九宫格中心区"
-                )
-            if background_image:
-                warnings.append(
-                    "同时写了 background.image 与 border_image：D2D 只画九宫格（背景图被跳过），"
-                    "WebView2 两张都画；要两端一致就只留一个"
-                )
-        if z_index_given:
-            warnings.append(
-                "decorations.z_index 只在 WebView2 生效；D2D 忽略它，按声明顺序把挂件画在卡片之上"
-            )
-        if line_gap_given:
-            warnings.append(
-                "line_gap_dip 在 WebView2 只加在预编辑行下方，D2D 则设成 body 全部子元素的间距"
-                "（竖排时候选列表与翻页栏之间也会被拉开）"
+                "line_gap_dip / outer_insets_dip / decorations）：`canvas` 只是一张透明卡片，"
+                "没有九宫格面板与挂件，候选框里只剩悬空的文字"
             )
         if decoration_images and "outer_insets_dip" not in window:
             warnings.append(
@@ -930,18 +1015,12 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         check_image_file(package_dir, background_image, "背景图", warnings)
     if border_image_image:
         check_image_file(package_dir, border_image_image, "九宫格面板图", warnings)
+    if border_image_light:
+        check_image_file(
+            package_dir, border_image_light, "九宫格面板图（浅色）", warnings
+        )
     for relative in decoration_images:
         check_image_file(package_dir, relative, "挂件图", warnings)
-        if Path(relative).suffix.lower() in ANIMATED_SUFFIXES:
-            warnings.append(
-                f"挂件图 {relative} 是动图（GIF/WebP/APNG）：只在 WebView2 会动，"
-                "D2D 只画第一帧"
-            )
-    if decoration_images:
-        warnings.append(
-            "挂件盒子与图片比例不一致时，WebView2 按 contain 保持比例留白，D2D 会拉伸变形；"
-            "width_dip / height_dip 请按图片宽高比给"
-        )
     if decoration_image and background_image:
         warnings.append(
             "同时有装饰图和卡片背景图：两者叠加后容易糊在一起，建议背景图的 opacity 压到 0.5 以下"
