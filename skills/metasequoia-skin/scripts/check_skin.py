@@ -8,6 +8,11 @@
 行距、面板外留白）。v2 必须以 base = "canvas" 为基底：写了 2 而 base 不是 canvas 的皮肤按 v1 加载，
 其中的 v2 字段（连同其中的错误）被忽略，只多一条警告；schema_version = 1 用 canvas 直接报错。
 
+还覆盖 v1 的版式几何（[candidate_window] 与 horizontal / vertical 子表）、卷轴展开（expand_panel /
+expand_rows）、翻页箭头样式（page_arrow_style / page_arrow_divider）、工具栏图片模式（[toolbar]
+mode = "image"、[toolbar.buttons.*]、button_defaults、button_flow）、装饰图叠加候选（candidate_overlay_*），
+以及 v2 的九宫格 repeat 与竖排覆盖（[border_image.vertical]、[content_insets_dip.vertical]）。
+
 用法：
     uv run check_skin.py <皮肤包目录>      # 目录里应有 skin.toml
     uv run check_skin.py <skins 根目录>    # 目录本身没有 skin.toml 时，扫描其下所有子目录
@@ -18,6 +23,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import string
 import sys
@@ -28,6 +34,7 @@ from pathlib import Path
 BUILTIN_IDS = {
     "fluent",
     "wechat",
+    "wechat_scroll",
     "graphite",
     "willow_green",
     "autumn_osmanthus",
@@ -38,6 +45,8 @@ RESERVED_IDS = {"default"}
 # kDefaultPageArrows / skins/default/<base>/skin.toml：内置皮肤翻页箭头的出厂值（microsoft 打开，
 # 其余关闭；canvas 的出厂值取 fluent）。fit_content 出厂一律为 false。
 DEFAULT_PAGE_ARROWS = {"microsoft": True}
+# kDefaultExpandPanel：内置皮肤卷轴展开的出厂值（wechat_scroll 打开，其余关闭；canvas 取 fluent）。
+DEFAULT_EXPAND_PANEL = {"wechat_scroll": True}
 # 共享基底来自 msime 的固定主题，按 fluent 的结构绘制并补上基底配色；system 跟随宿主没有调色板。
 SHARED_BASES = {"system", "shuishan", "light", "paper", "night", "ink"}
 # 全贴图基底：只用于 v2，面板外观完全由九宫格与挂件决定。
@@ -51,6 +60,45 @@ THEMES = ("dark", "light")
 ALIGNMENTS = ("left", "center", "right")
 FITS = ("cover", "contain", "stretch")
 SHADOWS = ("none", "soft", "strong")
+# ReadGeometry 的 page_arrow_style：chevron 折线 / triangle 实心三角。
+PAGE_ARROW_STYLES = ("chevron", "triangle")
+# ReadGeometry 里各长度键的 (DIP 上限, em 上限)。em 按候选字号换算后取整。
+GEOMETRY_LENGTH_LIMITS = {
+    "padding": (64.0, 4.0),
+    "item_gap": (64.0, 4.0),
+    "item_extra_height": (64.0, 4.0),
+    "number_inset": (64.0, 4.0),
+    "item_padding_right": (64.0, 4.0),
+    "item_min_width": (500.0, 40.0),
+    "number_gap": (64.0, 4.0),
+    "selected_bar_width": (16.0, 1.0),
+}
+# 版式里直接按数字上限的键（ReadOptionalBounded）。
+GEOMETRY_NUMBER_LIMITS = {
+    "number_scale": 2.0,
+    "selected_bar_height_em": 2.0,
+}
+GEOMETRY_BOOL_KEYS = (
+    "selected_bar_inside",
+    "item_corners_follow_card",
+    "justify_rows",
+    "trim_hidden_preedit_gap",
+)
+# [candidate_window.border_image] / .vertical 的 repeat：stretch（拉伸）或 repeat（按源图平铺）。
+BORDER_IMAGE_REPEATS = ("stretch", "repeat")
+# [toolbar] mode：bar（矩形条）/ image（整张背景图）。
+TOOLBAR_MODES = ("bar", "image")
+TOOLBAR_FLOW_DIRECTIONS = ("horizontal", "vertical")
+# ToolbarButtonStates：按钮键 → 状态名。无状态按钮的 images 表直接报错。
+TOOLBAR_BUTTON_STATES = {
+    "status": ("cn", "en", "ja", "caps", "en-candidate"),
+    "fullwidth": ("full", "half"),
+    "punctuation": ("cn", "en"),
+    "character_set": ("simplified", "traditional"),
+    "emoji": (),
+    "screen_keyboard": (),
+    "settings": (),
+}
 # v2：[[candidate_window.decorations]] 的 anchor 白名单。
 ANCHORS = (
     "top-left",
@@ -108,6 +156,7 @@ DETAIL_COLOR_KEYS = (
     "selected_bar",
     "preedit_background",
     "preedit_divider",
+    "page_arrow_divider",
 )
 # 翻译里的词性标记（`.cand-translation .cand-pos`）与义项分隔符（`.cand-sep`）可以单独配色，
 # 选中行另有四个对应的 selected_ 键；都不写时与 translation 同色。
@@ -196,12 +245,19 @@ def read_enum(
 
 
 def numeric_value(value: object) -> float | None:
-    """TOML 数字取值：bool 是 int 的子类但不算数字，NaN 也拒绝。"""
+    """TOML 数字取值：bool 是 int 的子类但不算数字，NaN / inf 也拒绝。
+
+    tomllib 会把超出 64 位范围的整数原样读成 Python int，转 float 可能溢出；
+    C++ 侧 toml++ 会把它当解析失败，这里同样按非法值处理，别让脚本崩掉。
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        number = float(value)
-        return number if number == number else None
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
+        return number if math.isfinite(number) else None
     return None
 
 
@@ -255,6 +311,79 @@ def read_optional_bounded(table: dict, key: str, maximum: float) -> bool:
     return bounded_number(table, key, maximum) is not None
 
 
+def read_border_image_repeat(table: dict) -> bool:
+    """对应 ReadBorderImageRepeat：stretch / repeat，1 个或 2 个值（横向 纵向）。"""
+    if "repeat" not in table:
+        return True
+    value = table["repeat"]
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        return False
+    if not values or len(values) > 2:
+        return False
+    return all(
+        isinstance(item, str) and item in BORDER_IMAGE_REPEATS for item in values
+    )
+
+
+def read_length(table: dict, key: str, maximum: float, maximum_em: float) -> bool:
+    """对应 ReadLength：缺省放行；写了可以是 0~maximum 的 DIP 数字，或 "<数值>em"。
+
+    em 的上限按 maximum_em 单独判断（如 item_min_width 是 40em，其他版式键是 4em）。
+    C++ 用 from_chars 解析，只接受完整的十进制/科学计数写法；这里用 float 校验后
+    再用 isfinite 挡住 nan / inf。
+    """
+    if key not in table:
+        return True
+    value = table[key]
+    if isinstance(value, str):
+        if len(value) < 3 or not value.endswith("em"):
+            return False
+        number_text = value[:-2]
+        # std::from_chars 的十进制模式同 strtod：接受 ".5" 和 "1."，不接受 "+1"；
+        # 负值由下面的 0 <= number 判断拒绝（"-0" 在 C++ 里同样算 0）。
+        if not re.fullmatch(
+            r"-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+            number_text,
+        ):
+            return False
+        try:
+            number = float(number_text)
+        except ValueError:
+            return False
+        return math.isfinite(number) and 0.0 <= number <= maximum_em
+    return bounded_value(value, maximum) is not None
+
+
+def read_geometry(table: dict) -> bool:
+    """对应 ReadGeometry：版式长度、比例、布尔与 page_arrow_style。
+
+    [candidate_window]、[candidate_window.horizontal] 与 [candidate_window.vertical] 共用这套键；
+    任何一项类型或范围不对，Server 都报「candidate_window 的版式数值无效」。
+    """
+    for key, (maximum, maximum_em) in GEOMETRY_LENGTH_LIMITS.items():
+        if not read_length(table, key, maximum, maximum_em):
+            return False
+    for key, maximum in GEOMETRY_NUMBER_LIMITS.items():
+        if key in table and bounded_value(table[key], maximum) is None:
+            return False
+    for key in GEOMETRY_BOOL_KEYS:
+        if not read_optional_bool(table, key):
+            return False
+    if "page_arrow_style" in table:
+        ok, _ = read_enum(table, "page_arrow_style", PAGE_ARROW_STYLES)
+        if not ok:
+            return False
+    # preedit_margin_dip 用 ReadBoxValues：1 / 2 / 4 个 0~500 的数值，按 CSS 简写展开。
+    state, _ = read_slice_array(table, "preedit_margin_dip")
+    if state not in ("absent", "ok"):
+        return False
+    return True
+
+
 def read_optional_bool(table: dict, key: str) -> bool:
     """对应 ReadOptionalBool：缺省放行，写了就必须是布尔。"""
     if key not in table:
@@ -268,7 +397,11 @@ def is_safe_relative_resource(name: str) -> bool:
         return False
     if not RESOURCE_PATTERN.match(name):
         return False
-    return all(part not in ("", ".", "..") for part in name.split("/"))
+    # std::filesystem::path 会把连续的内部分隔符压成一个（"assets//a.png" 能过），
+    # 但末尾的 "/" 会留下一个空组件（"assets/a.png/" 会被拒）。
+    if name.endswith("/"):
+        return False
+    return all(part not in (".", "..") for part in name.split("/") if part)
 
 
 def is_animatable_image_path(name: str) -> bool:
@@ -284,9 +417,9 @@ def is_animatable_image_path(name: str) -> bool:
 
 
 def read_resource(table: dict, key: str) -> tuple[bool, str | None]:
-    """对应 ReadResource：必须是包内相对路径。"""
+    """对应 ReadResource：必须是包内相对路径；键不存在时同样返回成功（与 C++ 一致）。"""
     if key not in table:
-        return False, None
+        return True, None
     ok, value = read_string(table, key, 256, True)
     if not ok or value is None or not is_safe_relative_resource(value):
         return False, None
@@ -340,20 +473,20 @@ def read_candidate_colors(table: object) -> tuple[bool, dict[str, object], bool]
     )
 
 
-def read_menu_colors(table: object) -> tuple[bool, dict[str, str], bool]:
+def read_menu_colors(table: object) -> tuple[bool, dict[str, str]]:
     """对应 ReadColors 里的 menu 分支：表可选，写了就必须是表且逐键过白名单。"""
     if table is None:
-        return True, {}, False
+        return True, {}
     if not isinstance(table, dict):
-        return True, {}, True
+        return False, {}
     out: dict[str, str] = {}
     for key in MENU_COLOR_KEYS:
         ok, value = read_css_color(table, key)
         if not ok:
-            return False, {}, False
+            return False, {}
         if value is not None:
             out[key] = value
-    return True, out, False
+    return True, out
 
 
 def read_toolbar_colors(table: object) -> tuple[bool, dict[str, str]]:
@@ -373,6 +506,305 @@ def read_toolbar_colors(table: object) -> tuple[bool, dict[str, str]]:
             return False, {}
         out[key] = value
     return True, out
+
+
+def validate_decoration_overlay(decoration: dict, warnings: list[str]) -> list[str]:
+    """对应 ReadDecorationCandidate：候选词叠加到装饰图上的那组键。
+
+    candidate_overlay 不是 true 时，Server 不读其余 candidate_overlay_* 键；这里只提醒一句，
+    不按它们的值报错。
+    """
+    enabled = decoration.get("candidate_overlay")
+    if "candidate_overlay" in decoration and not isinstance(enabled, bool):
+        return ["candidate_window.decoration.candidate_overlay 必须是 true 或 false"]
+    if enabled is not True:
+        if any(key.startswith("candidate_overlay_") for key in decoration):
+            warnings.append(
+                "candidate_window.decoration 写了 candidate_overlay_* 键，但 "
+                "candidate_overlay 不是 true，这些键不会生效"
+            )
+        return []
+
+    errors: list[str] = []
+    for key in (
+        "candidate_overlay_font_size_dip",
+        "candidate_overlay_min_font_size_dip",
+    ):
+        if key in decoration:
+            number = bounded_value(decoration[key], 200.0)
+            if number is None or number <= 0.0:
+                return [
+                    "candidate_window.decoration 的 candidate_overlay_font_size_dip 与 "
+                    "candidate_overlay_min_font_size_dip 必须是大于 0、不超过 200 的数值"
+                ]
+    if "candidate_overlay_max_width_dip" in decoration:
+        if bounded_value(decoration["candidate_overlay_max_width_dip"], 2000.0) is None:
+            return [
+                "candidate_window.decoration.candidate_overlay_max_width_dip 必须是 0–2000 的数值"
+            ]
+    if "candidate_overlay_color" in decoration:
+        ok, _ = read_css_color(decoration, "candidate_overlay_color")
+        if not ok:
+            return ["candidate_window.decoration.candidate_overlay_color 无效"]
+    align_h_ok, _ = read_enum(decoration, "candidate_overlay_align_h", ALIGNMENTS)
+    align_v_ok, _ = read_enum(
+        decoration, "candidate_overlay_align_v", ("top", "center", "bottom")
+    )
+    if not align_h_ok or not align_v_ok:
+        return [
+            "candidate_window.decoration 的 candidate_overlay_align_h 只能是 left、center 或 right，"
+            "candidate_overlay_align_v 只能是 top、center 或 bottom"
+        ]
+    for key in ("candidate_overlay_offset_x_dip", "candidate_overlay_offset_y_dip"):
+        if key in decoration:
+            number = numeric_value(decoration[key])
+            if number is None or abs(number) > 2000.0:
+                return [
+                    "candidate_window.decoration 的 candidate_overlay_offset_x_dip / "
+                    "candidate_overlay_offset_y_dip 必须在 -2000–2000 之间"
+                ]
+    if "candidate_overlay_strip_badge" in decoration and not isinstance(
+        decoration["candidate_overlay_strip_badge"], bool
+    ):
+        return [
+            "candidate_window.decoration.candidate_overlay_strip_badge 必须是 true 或 false"
+        ]
+    if "candidate_overlay_index" in decoration:
+        index = decoration["candidate_overlay_index"]
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index <= 100
+        ):
+            return [
+                "candidate_window.decoration.candidate_overlay_index 必须是 0–100 的整数"
+            ]
+    return errors
+
+
+def validate_toolbar_image_mode(
+    toolbar: dict, warnings: list[str]
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """对应 ReadToolbarImageMode：mode、背景图尺寸、按钮、button_defaults 与 button_flow。
+
+    返回 (错误, 图片引用)。图片引用是 (相对路径, 找不到时的报错文案)；bar 模式不检查文件存在。
+    mode 不是 image 时 Server 仍会解析这些键（写错照样拒收），只是最终不生效并记一条提示。
+    """
+    mode_ok, mode_value = read_enum(toolbar, "mode", TOOLBAR_MODES)
+    if not mode_ok:
+        return ["toolbar.mode 只能是 bar 或 image"], []
+    mode = mode_value or "bar"
+
+    image: str | None = None
+    if "image" in toolbar:
+        image_ok, image_value = read_resource(toolbar, "image")
+        if (
+            not image_ok
+            or image_value is None
+            or not is_animatable_image_path(image_value)
+        ):
+            return [
+                "toolbar.image 无效（需为皮肤目录里的 .png、.apng、.gif 或 .webp）"
+            ], []
+        image = image_value
+
+    width: float | None = 0.0
+    height: float | None = 0.0
+    if "image_width_dip" in toolbar:
+        width = bounded_value(toolbar["image_width_dip"], 2000.0)
+    if "image_height_dip" in toolbar:
+        height = bounded_value(toolbar["image_height_dip"], 2000.0)
+    if width is None or height is None:
+        return ["toolbar.image_width_dip / image_height_dip 必须是 0–2000 的数值"], []
+
+    buttons: dict[str, dict] = {}
+    if "buttons" in toolbar:
+        raw_buttons = toolbar["buttons"]
+        if not isinstance(raw_buttons, dict):
+            return ["toolbar.buttons 必须是表"], []
+        for key, node in raw_buttons.items():
+            states = TOOLBAR_BUTTON_STATES.get(key)
+            if states is None:
+                warnings.append(f"没有 toolbar.buttons.{key} 这个按钮，已忽略")
+                continue
+            if not isinstance(node, dict):
+                return [f"toolbar.buttons.{key} 必须是表"], []
+            if "visible" in node and not isinstance(node["visible"], bool):
+                return [f"toolbar.buttons.{key}.visible 必须是 true 或 false"], []
+            for coordinate in ("x_dip", "y_dip"):
+                if (
+                    coordinate in node
+                    and bounded_value(node[coordinate], 2000.0) is None
+                ):
+                    return [
+                        f"toolbar.buttons.{key} 的 x_dip / y_dip 必须是 0–2000 的数值"
+                    ], []
+            look_error, background = read_toolbar_button_look(
+                node, f"toolbar.buttons.{key}"
+            )
+            if look_error:
+                return [look_error], []
+            button_image: str | None = None
+            if "image" in node:
+                image_ok, image_value = read_resource(node, "image")
+                if (
+                    not image_ok
+                    or image_value is None
+                    or not is_animatable_image_path(image_value)
+                ):
+                    return [
+                        f"toolbar.buttons.{key}.image 无效（需为皮肤目录里的 .png、.apng、.gif 或 .webp）"
+                    ], []
+                button_image = image_value
+            state_images: list[tuple[str, str]] = []
+            if "images" in node:
+                raw_images = node["images"]
+                if not isinstance(raw_images, dict):
+                    return [f"toolbar.buttons.{key}.images 必须是表"], []
+                if not states:
+                    return [
+                        f"toolbar.buttons.{key} 没有状态之分，只能写 image，不能写 images"
+                    ], []
+                for state, path in raw_images.items():
+                    if (
+                        not isinstance(path, str)
+                        or not is_safe_relative_resource(path)
+                        or not is_animatable_image_path(path)
+                    ):
+                        return [
+                            f"toolbar.buttons.{key}.images.{state} 无效"
+                            "（需为皮肤目录里的 .png、.apng、.gif 或 .webp）"
+                        ], []
+                    if state not in states:
+                        warnings.append(
+                            f"toolbar.buttons.{key}.images 里的 {state} 不是这个按钮的状态，已忽略"
+                        )
+                        continue
+                    state_images.append((state, path))
+            buttons[key] = {
+                "background": background,
+                "image": button_image,
+                "states": state_images,
+                "x": node.get("x_dip"),
+                "y": node.get("y_dip"),
+            }
+
+    defaults_background: str | None = None
+    if "button_defaults" in toolbar:
+        raw_defaults = toolbar["button_defaults"]
+        if not isinstance(raw_defaults, dict):
+            return ["toolbar.button_defaults 必须是表"], []
+        look_error, defaults_background = read_toolbar_button_look(
+            raw_defaults, "toolbar.button_defaults"
+        )
+        if look_error:
+            return [look_error], []
+
+    flow: dict | None = None
+    if "button_flow" in toolbar:
+        raw_flow = toolbar["button_flow"]
+        if not isinstance(raw_flow, dict):
+            return ["toolbar.button_flow 必须是表"], []
+        for coordinate in ("x_dip", "y_dip"):
+            if coordinate in raw_flow:
+                number = numeric_value(raw_flow[coordinate])
+                if number is None or not 0.0 <= number <= 2000.0:
+                    return [
+                        "toolbar.button_flow 的 x_dip / y_dip 必须是 0–2000 的数值"
+                    ], []
+        direction_ok, _ = read_enum(raw_flow, "direction", TOOLBAR_FLOW_DIRECTIONS)
+        if not direction_ok:
+            return ["toolbar.button_flow.direction 只能是 horizontal 或 vertical"], []
+        if "gap_dip" in raw_flow:
+            number = numeric_value(raw_flow["gap_dip"])
+            if number is None or not 0.0 <= number <= 500.0:
+                return ["toolbar.button_flow.gap_dip 必须是 0–500 的数值"], []
+        flow = raw_flow
+
+    if mode != "image":
+        if (
+            image is not None
+            or buttons
+            or "button_defaults" in toolbar
+            or "button_flow" in toolbar
+        ):
+            warnings.append(
+                "toolbar 的 image、buttons、button_defaults 与 button_flow 只在 "
+                'mode = "image" 时生效，已忽略'
+            )
+        return [], []
+
+    errors: list[str] = []
+    references: list[tuple[str, str]] = []
+    if (
+        image is None
+        or width is None
+        or width <= 0.0
+        or height is None
+        or height <= 0.0
+    ):
+        return [
+            'toolbar.mode = "image" 需要同时写 image、image_width_dip 与 image_height_dip'
+        ], []
+    references.append((image, "找不到 toolbar.image 文件"))
+    if defaults_background:
+        references.append(
+            (defaults_background, "找不到 toolbar.button_defaults.background 文件")
+        )
+    for key, button in buttons.items():
+        if button["image"]:
+            references.append(
+                (button["image"], f"找不到 toolbar.buttons.{key}.image 文件")
+            )
+        if button["background"]:
+            references.append(
+                (button["background"], f"找不到 toolbar.buttons.{key}.background 文件")
+            )
+        for state, path in button["states"]:
+            references.append(
+                (
+                    path,
+                    f"找不到 toolbar.buttons.{key}.images.{state} 文件",
+                )
+            )
+        if flow is None and (button["x"] is None) != (button["y"] is None):
+            warnings.append(
+                f"toolbar.buttons.{key} 只写了 x_dip、y_dip 其中一个，又没有 button_flow，"
+                "这个按钮不会显示"
+            )
+    return errors, references
+
+
+def read_toolbar_button_look(table: dict, where: str) -> tuple[str | None, str | None]:
+    """对应 ReadToolbarButtonLook：按钮框宽高、图标字号与按钮底图。
+
+    返回 (错误文案, 底图路径)。width_dip / height_dip / icon_size_dip 都必须 > 0 且 ≤ 500。
+    """
+    for key in ("width_dip", "height_dip"):
+        if key in table:
+            number = bounded_value(table[key], 500.0)
+            if number is None or number <= 0.0:
+                return (
+                    f"{where} 的 width_dip / height_dip 必须是大于 0、不超过 500 的数值",
+                    None,
+                )
+    if "icon_size_dip" in table:
+        number = bounded_value(table["icon_size_dip"], 500.0)
+        if number is None or number <= 0.0:
+            return (
+                f"{where}.icon_size_dip 必须是大于 0、不超过 500 的数值",
+                None,
+            )
+    background: str | None = None
+    if "background" in table:
+        ok, value = read_resource(table, "background")
+        if not ok or value is None or not is_animatable_image_path(value):
+            return (
+                f"{where}.background 无效（需为皮肤目录里的 .png、.apng、.gif 或 .webp）",
+                None,
+            )
+        background = value
+    return None, background
 
 
 def looks_like_css_color(value: str) -> bool:
@@ -463,7 +895,9 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         errors.append("缺少或无法解析 skin.toml")
         return errors, warnings
     try:
-        root = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        # toml++ 会跳过 UTF-8 BOM（parser.inl 的 skip bom），Windows 记事本另存的
+        # 「UTF-8 带 BOM」skin.toml 在 Server 那边能正常解析；utf-8-sig 与它一致。
+        root = tomllib.loads(manifest.read_text(encoding="utf-8-sig"))
     except UnicodeDecodeError:
         # C++ 侧无效 UTF-8 走 toml::parse 的 parse_error，与其他解析失败同一条错误。
         errors.append("缺少或无法解析 skin.toml")
@@ -584,6 +1018,29 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         errors.append("candidate_window.page_arrows 必须是 true 或 false")
         return errors, warnings
     page_arrows_given = "page_arrows" in window
+    if not read_optional_bool(window, "expand_panel"):
+        errors.append("candidate_window.expand_panel 必须是 true 或 false")
+        return errors, warnings
+    if "expand_rows" in window:
+        rows = window["expand_rows"]
+        if isinstance(rows, bool) or not isinstance(rows, int) or not 2 <= rows <= 8:
+            errors.append("candidate_window.expand_rows 必须是 2–8 的整数")
+            return errors, warnings
+
+    # 版式：直接写在 [candidate_window] 里的对两种排列都生效，
+    # [candidate_window.horizontal] / [candidate_window.vertical] 只覆盖那一种。
+    if not read_geometry(window):
+        errors.append("candidate_window 的版式数值无效")
+        return errors, warnings
+    for subtable in ("horizontal", "vertical"):
+        if subtable not in window:
+            continue
+        if not isinstance(window[subtable], dict):
+            errors.append("candidate_window 的版式数值无效")
+            return errors, warnings
+        if not read_geometry(window[subtable]):
+            errors.append("candidate_window 的版式数值无效")
+            return errors, warnings
 
     # 装饰图：表可选，一旦出现就必须给 image 和两个正数尺寸。
     decoration_image: str | None = None
@@ -605,6 +1062,10 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         if top is None or width is None or top <= 0.0 or width <= 0.0:
             # 两个尺寸都必须给出且都 > 0；缺一个按 0 处理，等于没给。
             errors.append("candidate_window.decoration 尺寸无效")
+            return errors, warnings
+        overlay_errors = validate_decoration_overlay(decoration, warnings)
+        if overlay_errors:
+            errors.extend(overlay_errors)
             return errors, warnings
 
     # 背景图：同样可选，一旦出现就必须给 image。
@@ -632,14 +1093,18 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
     # v2 专有字段：只在 schema_version = 2（即 base = canvas）时被解析。
     border_image_image: str | None = None
     border_image_light: str | None = None
+    border_image_vertical_image: str | None = None
+    border_image_vertical_light: str | None = None
+    border_image_vertical_source_given = False
     decoration_images: list[str] = []
     if schema_version >= 2:
         if "border_image" in window:
             border_image = window["border_image"]
-            if not isinstance(border_image, dict) or "source" not in border_image:
-                errors.append(
-                    "candidate_window.border_image.source 无效（需为 .png、.apng、.gif 或 .webp）"
-                )
+            if not isinstance(border_image, dict):
+                errors.append("candidate_window.border_image 必须是表")
+                return errors, warnings
+            if "source" not in border_image:
+                errors.append("candidate_window.border_image 缺少 source")
                 return errors, warnings
             source_ok, border_image_image = read_resource(border_image, "source")
             if (
@@ -665,8 +1130,11 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                         "（需为 .png、.apng、.gif 或 .webp）"
                     )
                     return errors, warnings
-            # slice_dip 是必填的：没有它九宫格无从切起；形状、范围不对也落到同一条错误。
+            # slice_dip 是必填的：没有它九宫格无从切起；缺键与写错各有一条文案。
             state, _ = read_slice_array(border_image, "slice_dip")
+            if state == "absent":
+                errors.append("candidate_window.border_image 缺少 slice_dip")
+                return errors, warnings
             if state != "ok":
                 errors.append(
                     "candidate_window.border_image.slice_dip 必须是 1、2 或 4 个 0–500 的数值"
@@ -684,6 +1152,77 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             if "fill" in border_image and not isinstance(border_image["fill"], bool):
                 errors.append("candidate_window.border_image.fill 必须是 true 或 false")
                 return errors, warnings
+            if not read_border_image_repeat(border_image):
+                errors.append(
+                    "candidate_window.border_image.repeat 必须是 stretch 或 repeat，1 个或 2 个值"
+                )
+                return errors, warnings
+
+            # 竖排覆盖：只写与横排不同的键。source / slice_dip 不写就继承横排；
+            # light_source 不继承——横排那张浅色图是按横排几何画的。
+            if "vertical" in border_image:
+                vertical = border_image["vertical"]
+                if not isinstance(vertical, dict):
+                    errors.append("candidate_window.border_image.vertical 必须是表")
+                    return errors, warnings
+                border_image_vertical_image = border_image_image
+                if "source" in vertical:
+                    border_image_vertical_source_given = True
+                    source_ok, border_image_vertical_image = read_resource(
+                        vertical, "source"
+                    )
+                    if (
+                        not source_ok
+                        or border_image_vertical_image is None
+                        or not is_animatable_image_path(border_image_vertical_image)
+                    ):
+                        errors.append(
+                            "candidate_window.border_image.vertical.source 无效"
+                            "（需为 .png、.apng、.gif 或 .webp）"
+                        )
+                        return errors, warnings
+                if "light_source" in vertical:
+                    light_ok, border_image_vertical_light = read_resource(
+                        vertical, "light_source"
+                    )
+                    if (
+                        not light_ok
+                        or border_image_vertical_light is None
+                        or not is_animatable_image_path(border_image_vertical_light)
+                    ):
+                        errors.append(
+                            "candidate_window.border_image.vertical.light_source 无效"
+                            "（需为 .png、.apng、.gif 或 .webp）"
+                        )
+                        return errors, warnings
+                state, _ = read_slice_array(vertical, "slice_dip")
+                if state not in ("absent", "ok"):
+                    errors.append(
+                        "candidate_window.border_image.vertical.slice_dip 必须是 "
+                        "1、2 或 4 个 0–500 的数值"
+                    )
+                    return errors, warnings
+                for key in ("stretch_dip", "width_dip"):
+                    state, _ = read_slice_array(vertical, key)
+                    if state == "absent":
+                        continue
+                    if state in ("not-list", "shape", "value"):
+                        errors.append(
+                            f"candidate_window.border_image.vertical.{key} 必须是 "
+                            "1、2 或 4 个 0–500 的数值"
+                        )
+                        return errors, warnings
+                if "fill" in vertical and not isinstance(vertical["fill"], bool):
+                    errors.append(
+                        "candidate_window.border_image.vertical.fill 必须是 true 或 false"
+                    )
+                    return errors, warnings
+                if not read_border_image_repeat(vertical):
+                    errors.append(
+                        "candidate_window.border_image.vertical.repeat 必须是 stretch 或 "
+                        "repeat，1 个或 2 个值"
+                    )
+                    return errors, warnings
 
         if "content_insets_dip" in window:
             content_insets = window["content_insets_dip"]
@@ -697,6 +1236,30 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                 ):
                     errors.append("candidate_window.content_insets_dip 数值超出范围")
                     return errors, warnings
+            if "vertical" in content_insets:
+                vertical_insets = content_insets["vertical"]
+                if not isinstance(vertical_insets, dict):
+                    errors.append(
+                        "candidate_window.content_insets_dip.vertical 必须是表"
+                    )
+                    return errors, warnings
+                for key, maximum in CONTENT_INSET_BOUNDS.items():
+                    if (
+                        key in vertical_insets
+                        and bounded_value(vertical_insets[key], maximum) is None
+                    ):
+                        errors.append(
+                            "candidate_window.content_insets_dip.vertical 数值超出范围"
+                        )
+                        return errors, warnings
+            if not any(key in content_insets for key in CONTENT_INSET_BOUNDS):
+                # 空表与「整段不写」不是一回事：解析器会把四边都当成 0，
+                # 于是「边宽 + 5 DIP」的默认留白也一并消失。
+                warnings.append(
+                    "写了空的 [candidate_window.content_insets_dip]（四边都没给）："
+                    "四边按 0 处理，不会再按「边宽 + 5 DIP」留白；"
+                    "不想要自定义内边距就整段删掉"
+                )
 
         if "line_gap_dip" in window and not read_optional_bounded(
             window, "line_gap_dip", 100.0
@@ -800,22 +1363,18 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
                 warnings.append(f"[candidate.{theme_name}] 不是表，已被 Server 忽略")
             else:
                 bucket.update(values)
-            menu_ok, menu_values, menu_mis_typed = read_menu_colors(
+            menu_ok, menu_values = read_menu_colors(
                 table.get("menu") if isinstance(table, dict) else None
             )
             if not menu_ok:
                 errors.append("candidate 配色无效")
                 return errors, warnings
-            if menu_mis_typed:
-                warnings.append(
-                    f"[candidate.{theme_name}.menu] 不是表，已被 Server 忽略"
-                )
-            else:
-                menu_bucket.update(menu_values)
+            menu_bucket.update(menu_values)
 
-    # 悬浮工具栏配色。
+    # 悬浮工具栏配色与图片模式。
     toolbar_dark: dict[str, str] = {}
     toolbar_light: dict[str, str] = {}
+    toolbar_files: list[tuple[str, str]] = []
     if "toolbar" in root:
         toolbar = root["toolbar"]
         if not isinstance(toolbar, dict):
@@ -832,19 +1391,41 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         ):
             errors.append("toolbar.corner_radius_dip 超出范围")
             return errors, warnings
+        if (
+            "icon_corner_radius_dip" in toolbar
+            and bounded_number(toolbar, "icon_corner_radius_dip", 16.0) is None
+        ):
+            errors.append("toolbar.icon_corner_radius_dip 超出范围")
+            return errors, warnings
+        toolbar_errors, toolbar_files = validate_toolbar_image_mode(toolbar, warnings)
+        if toolbar_errors:
+            errors.extend(toolbar_errors)
+            return errors, warnings
 
     # 图片存在性：Server 在 Load 的最后统一检查。
+    # 竖排没写 source / light_source 时分别继承横排 / 为空，不必重复检查横排那张。
     for relative, message in (
         (decoration_image, "找不到 candidate_window.decoration.image 文件"),
         (background_image, "找不到 candidate_window.background.image 文件"),
         (border_image_image, "找不到 candidate_window.border_image.source 文件"),
         (border_image_light, "找不到 candidate_window.border_image.light_source 文件"),
+        (
+            border_image_vertical_image if border_image_vertical_source_given else None,
+            "找不到 candidate_window.border_image.vertical.source 文件",
+        ),
+        (
+            border_image_vertical_light,
+            "找不到 candidate_window.border_image.vertical.light_source 文件",
+        ),
     ):
         if relative and not (package_dir / relative).is_file():
             errors.append(message)
     for relative in decoration_images:
         if not (package_dir / relative).is_file():
             errors.append("找不到 candidate_window.decorations.image 文件")
+    for relative, message in toolbar_files:
+        if not (package_dir / relative).is_file():
+            errors.append(message)
     if errors:
         return errors, warnings
 
@@ -978,9 +1559,58 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
             f"{'true' if inherited else 'false'}）"
         )
     if not fit_content_given:
+        fit_base = "fluent" if base == CANVAS_BASE or base in SHARED_BASES else base
         warnings.append(
-            "没写 fit_content：沿用 base 的默认皮肤设置（出厂为 false，"
+            "没写 fit_content：沿用 base 的默认皮肤设置（"
+            f"数据目录 skins\\default\\{fit_base}\\skin.toml，出厂为 false，"
             "卡片垫 160 DIP 的出厂最小宽度）"
+        )
+    # 卷轴展开和 page_arrows 一样读 base 的出厂值；canvas 与共享基底的 base 已被改写为 fluent。
+    expand_base = "fluent" if base == CANVAS_BASE or base in SHARED_BASES else base
+    expand_inherited = DEFAULT_EXPAND_PANEL.get(expand_base, False)
+    expand_enabled = window.get("expand_panel", expand_inherited)
+    if not isinstance(expand_enabled, bool):
+        expand_enabled = expand_inherited
+    if "expand_panel" not in window:
+        warnings.append(
+            "没写 expand_panel：沿用 base 的默认皮肤设置（"
+            f"数据目录 skins\\default\\{expand_base}\\skin.toml，出厂为 "
+            f"{'true' if expand_inherited else 'false'}）"
+        )
+    if "expand_rows" in window and not expand_enabled:
+        warnings.append(
+            "写了 expand_rows，但当前皮肤没有打开 expand_panel（也没有从 base 继承到 true）："
+            "行数不会生效"
+        )
+    # page_arrows 没写时也可能从 base 继承到 true（microsoft）；两种来源都要算进来，
+    # 否则 expand_panel = true 时横排箭头被卷轴展开顶掉，提示却不会出现。
+    page_arrows_base = "fluent" if base == CANVAS_BASE or base in SHARED_BASES else base
+    page_arrows_enabled = window.get(
+        "page_arrows", DEFAULT_PAGE_ARROWS.get(page_arrows_base, False)
+    )
+    if not isinstance(page_arrows_enabled, bool):
+        page_arrows_enabled = DEFAULT_PAGE_ARROWS.get(page_arrows_base, False)
+    if expand_enabled and page_arrows_enabled:
+        warnings.append(
+            "expand_panel 与 page_arrows 同时生效：横排不会显示翻页箭头（卷轴展开优先），"
+            "竖排仍按 page_arrows 显示"
+        )
+    # page_arrow_style 可以写在横排子表里；只有横排真的会画箭头时才需要分隔线。
+    page_arrow_style = window.get("page_arrow_style")
+    horizontal = window.get("horizontal")
+    if isinstance(horizontal, dict) and "page_arrow_style" in horizontal:
+        page_arrow_style = horizontal["page_arrow_style"]
+    if (
+        page_arrow_style == "triangle"
+        and page_arrows_enabled
+        and not expand_enabled
+        and "horizontal" in layouts
+        and not dark_colors.get("page_arrow_divider")
+        and not light_colors.get("page_arrow_divider")
+    ):
+        warnings.append(
+            'page_arrow_style = "triangle" 但没写 page_arrow_divider：'
+            "横排三角箭头前的分隔线不会画（竖排本来就不画）"
         )
     # v2 字段只在 canvas 上被解析；走到这里 schema_version 已按 base 修正过。
     # 上面那条降级说明已经交代了 v2 字段被忽略，这里不再重复（也不要再劝人「改成 2」，人家本来就写了 2）。
@@ -1019,8 +1649,21 @@ def validate_package(package_dir: Path) -> tuple[list[str], list[str]]:
         check_image_file(
             package_dir, border_image_light, "九宫格面板图（浅色）", warnings
         )
+    if border_image_vertical_source_given and border_image_vertical_image:
+        check_image_file(
+            package_dir, border_image_vertical_image, "竖排九宫格面板图", warnings
+        )
+    if border_image_vertical_light:
+        check_image_file(
+            package_dir,
+            border_image_vertical_light,
+            "竖排九宫格面板图（浅色）",
+            warnings,
+        )
     for relative in decoration_images:
         check_image_file(package_dir, relative, "挂件图", warnings)
+    for relative, _ in toolbar_files:
+        check_image_file(package_dir, relative, "工具栏图片", warnings)
     if decoration_image and background_image:
         warnings.append(
             "同时有装饰图和卡片背景图：两者叠加后容易糊在一起，建议背景图的 opacity 压到 0.5 以下"

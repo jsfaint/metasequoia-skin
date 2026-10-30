@@ -1,0 +1,220 @@
+# 水杉输入法 v1 皮肤模板 —— 复制整个文件成 <皮肤目录>/skin.toml 再改。
+# 未注释的键都是合法值；注释掉的是可选键，按需取消注释。
+# 所有图片路径都是占位符：把 assets/ 下的文件换成你自己的真实图片。
+
+schema_version = 1                 # 必须是数字 1，不能写 "1" 或 1.0
+id = "midnight-ink"                # 必须等于目录名
+name = "深夜墨水 Midnight Ink"      # 设置页显示名，≤80 字节
+version = "1.0.0"                  # ≤32 字节
+author = "你的名字"                 # 可选，≤120 字节
+description = "深蓝底 + 琥珀色高亮"  # 可选，≤500 字节
+base = "fluent"                    # 七个内置皮肤或共享基底之一；canvas 只给 v2
+
+[supports]                         # 必填，四项全选最稳
+layouts = ["horizontal", "vertical"]
+themes = ["dark", "light"]
+
+[candidate_window]                 # 表必须存在（哪怕只写 min_width_dip = 0）
+min_width_dip = 320                # 0~1000，0 = 不设
+corner_radius_dip = 8              # 0~32；0 = 直角
+border_width_dip = 1.5             # 0~4，可小数；颜色取 [candidate.*].border
+item_corner_radius_dip = 6         # 0~16；高亮块圆角
+shadow = "soft"                    # none / soft / strong
+backdrop = "none"                  # none / acrylic / mica；有 border_image 时不生效
+font_family = "Segoe UI"           # ≤64 字节，只能一个字体名；字号不由皮肤决定
+page_arrows = false                # true / false；不写跟 base 的出厂值（microsoft 为 true）
+page_arrow_style = "chevron"       # chevron(折线) / triangle(实心三角)
+fit_content = false                # true = 卡片严格按文字宽度收紧
+expand_panel = false               # true = 横排用卷轴展开代替翻页（竖排不受影响）
+# expand_rows = 4                  # 2~8 的整数；只在 expand_panel = true 时生效
+
+# 版式微调，全部可省略；长度写 DIP 数字或 "0.3em"（按候选字号换算、四舍五入到整 DIP）。
+# padding = 5                      # 卡片内边距，0~64 / ≤4em
+# item_gap = 2                     # 候选项间距，0~64 / ≤4em
+# item_extra_height = 2            # 候选项比 1.35 倍字号多出的高度，0~64 / ≤4em
+# number_inset = 5                 # 高亮左缘到序号左端的距离，0~64 / ≤4em
+# item_padding_right = 0           # 候选文字后的留白，0~64 / ≤4em
+# item_min_width = 0               # 横排每项最小宽度，0~500 / ≤40em；0 = 不限
+# number_gap = 1.5                 # 序号与候选之间的空，0~64 / ≤4em
+# number_scale = 0.8               # 序号字号相对候选字号的比例，0~2
+# selected_bar_width = 3           # 选中竖条宽，0~16 / ≤1em
+# selected_bar_height_em = 0.85    # 选中竖条高，按字号倍数，0~2
+# selected_bar_inside = false      # true = 竖条落在高亮左缘之内
+# item_corners_follow_card = true  # 落在卡片四角上的高亮角跟卡片同一圆角
+# justify_rows = false             # 横排时把多出的宽度均分给同一行，高亮铺满到卡片右边
+# trim_hidden_preedit_gap = false  # 隐藏预编辑行时抵掉它与候选之间的 2 DIP 行距
+# preedit_margin_dip = [0, 0, 0, 0] # 预编辑行外边距（上右下左），1 / 2 / 4 个 0~500 的值
+
+# 横排 / 竖排各写一套覆盖；必须排在 [candidate_window] 直接键之后。
+# [candidate_window.horizontal]
+# item_min_width = "3.5em"
+# item_gap = "0.15em"
+#
+# [candidate_window.vertical]
+# selected_bar_height_em = 0.8
+
+# 卡片内的背景图。整段注释掉就没有背景图；表一旦出现，image 和文件必须存在。
+# [candidate_window.background]
+# image = "assets/paper.png"       # 必填；换成真实文件
+# fit = "cover"                    # cover(默认) / contain / stretch
+# opacity = 0.35                   # 0~1，1 = 原样
+
+# 卡片上方的装饰图。表和内容一起出现或一起消失。
+# [candidate_window.decoration]
+# image = "assets/mountain.png"    # 必填；换成真实文件
+# top_inset_dip = 88               # 必填，0~500 且 > 0
+# width_dip = 136                  # 必填，0~1000 且 > 0
+# align = "right"                  # left / center / right，默认 right
+# candidate_overlay = false        # true 时把一个候选词叠在装饰图上
+# candidate_overlay_index = 1      # 0 = 跟随高亮；1 起 = 当前页第几个，0~100
+# candidate_overlay_font_size_dip = 16       # >0 且 ≤200
+# candidate_overlay_min_font_size_dip = 8    # >0 且 ≤200
+# candidate_overlay_max_width_dip = 0        # 0 = 装饰框宽度，0~2000
+# candidate_overlay_color = "#ffffff"
+# candidate_overlay_align_h = "center"       # left / center / right
+# candidate_overlay_align_v = "center"       # top / center / bottom
+# candidate_overlay_offset_x_dip = 0         # -2000~2000
+# candidate_overlay_offset_y_dip = 0         # -2000~2000
+# candidate_overlay_strip_badge = true       # true = 只画词本身，不带标注
+
+[candidate.dark]                   # 22 个颜色键 + show_selected_bar；建议写全
+# ── 基础 8 色 ──
+accent = "#6B69D6"                 # 强调色：预编辑光标；选中竖条的默认颜色
+selected = "#3e3e3eb9"             # 选中行背景
+hover = "#414141"                  # 悬停行背景；翻页箭头悬停也用它
+surface = "#202020"                # 候选窗背景；也是亚克力 / 云母的色调
+border = "#9b9b9b2e"               # 候选窗外框
+text = "#e9e8e8"                   # 候选文字（会被设置页「候选文字颜色」覆盖）
+number = "#e9e8e89d"               # 序号 1. 2. 3.；翻页箭头也用它
+translation = "#e6a817"            # 候选后的翻译；写了会连带重置下面两个翻译细分键
+show_selected_bar = true           # 选中行左侧竖色条
+
+# ── 细分 10 色，不写时按注释回落 ──
+candidate_text = "#e9e8e8"         # 普通候选文字 → text；写了就一定要写 selected_text
+preedit_text = "#e9e8e8"           # 预编辑拼音文字 → text
+preedit_caret = "#6B69D6"          # 预编辑光标 → accent
+selected_text = "#ffffff"          # 选中候选文字 → base 的选中文字色
+selected_number = "#ffffff"        # 选中候选序号 → base 的选中序号色
+selected_translation = "#ffd479"   # 选中候选翻译 → base 的选中翻译色，再退回 translation
+selected_bar = "#6B69D6"           # 选中项左侧竖条 → accent
+preedit_background = "#ffffff10"   # 预编辑行底色；不写则透明
+preedit_divider = "#6B69D6"        # 预编辑行下方 1px 分隔线；不写则没有
+page_arrow_divider = "#6B69D6"     # 横排三角箭头前的分隔线；只在 triangle 时画
+
+# ── 翻译细分 4 色；不写时与 translation 同色，要独立颜色就写全这四行 ──
+translation_pos = "#e6a817"             # 翻译里的词性标记
+translation_separator = "#e6a817"       # 翻译里义项之间的分隔符
+selected_translation_pos = "#ffd479"    # 选中行的词性标记
+selected_translation_separator = "#ffd479"  # 选中行的分隔符
+
+# 只有 backdrop 不是 none 时才用得上，0~1 的数
+# backdrop_opacity = 0.15           # surface 色调盖在材质上的不透明度
+# backdrop_luminosity = 0.96        # 亮度层不透明度；亚克力 0.85、云母 1
+
+# 候选窗右键菜单，可省略
+# [candidate.dark.menu]
+# background = "#202020"
+# border = "#9b9b9b2e"
+# text = "#e9e8e8"
+# hover = "#414141"
+
+[candidate.light]
+accent = "#6B69D6"
+selected = "#E8E8E8"
+hover = "#ECECEC"
+surface = "#FFFFFF"
+border = "rgba(0,0,0,.12)"
+text = "#1A1A1A"
+number = "#1A1A1A8C"
+translation = "#B8860B"
+show_selected_bar = true
+candidate_text = "#1A1A1A"
+preedit_text = "#1A1A1A"
+preedit_caret = "#6B69D6"
+selected_text = "#1A1A1A"
+selected_number = "#1A1A1A8C"
+selected_translation = "#B8860B"
+selected_bar = "#6B69D6"
+preedit_background = "#00000008"
+preedit_divider = "rgba(0,0,0,.12)"
+page_arrow_divider = "rgba(0,0,0,.12)"
+
+translation_pos = "#B8860B"
+translation_separator = "#B8860B"
+selected_translation_pos = "#B8860B"
+selected_translation_separator = "#B8860B"
+
+# backdrop_opacity = 0
+# backdrop_luminosity = 0.85
+
+# [candidate.light.menu]
+# background = "#FFFFFF"
+# border = "rgba(0,0,0,.12)"
+# text = "#1A1A1A"
+# hover = "rgba(0,0,0,.06)"
+
+# 悬浮工具栏（bar 模式）。整段注释掉就完全跟 base 走。
+# [toolbar]
+# corner_radius_dip = 8            # 0~32
+# icon_corner_radius_dip = 6       # 0~16；图标悬停底色的圆角
+#
+# [toolbar.dark]
+# background = "#1A1A1A"           # 工具栏底色
+# border = "rgba(255,255,255,.15)" # 外框
+# handle = "#8E8CD8"               # 左侧拖动条；不写时取同主题的 accent
+# divider = "rgba(255,255,255,.15)" # 分隔线
+# icon = "#FFFFFF"                 # 图标字形
+# hover = "rgba(255,255,255,.10)"  # 图标悬停底色
+#
+# [toolbar.light]
+# background = "#FFFFFF"
+# border = "rgba(0,0,0,.12)"
+# handle = "#6B69D6"
+# divider = "rgba(0,0,0,.12)"
+# icon = "#1A1A1A"
+# hover = "rgba(0,0,0,.06)"
+
+# 工具栏图片模式见 ../toolbar-image-mode.md；与上面的 bar 模式二选一。
+# [toolbar]
+# mode = "image"
+# image = "assets/toolbar.png"     # 必填；换成真实文件
+# image_width_dip = 168            # 必填，>0 且 ≤2000
+# image_height_dip = 40            # 必填，>0 且 ≤2000
+# icon_corner_radius_dip = 15      # 0~16
+#
+# [toolbar.button_defaults]
+# width_dip = 30
+# height_dip = 30
+# icon_size_dip = 20
+# background = "assets/plate.png"
+#
+# [toolbar.button_flow]
+# x_dip = 170
+# y_dip = 0
+# direction = "vertical"           # horizontal(默认) / vertical
+# gap_dip = 2
+#
+# [toolbar.buttons.status]
+# x_dip = 10
+# y_dip = 7
+# width_dip = 26
+# height_dip = 26
+# icon_size_dip = 18
+# background = "assets/plate.png"
+# image = "assets/status.png"
+# visible = true
+#
+# [toolbar.buttons.status.images]  # 只有有状态的按钮能写
+# cn = "assets/status-cn.png"
+# en = "assets/status-en.png"
+#
+# [toolbar.buttons.settings]
+# x_dip = 124
+# y_dip = 7
+# image = "assets/settings.png"
+
+# 授权声明，输入法不读，但分享出去前该写。
+# [license]
+# code = "MIT"                     # skin.toml 本身的授权
+# assets = "CC-BY-4.0 / 自绘"       # 图片素材的授权；来源未核实就写 UNVERIFIED
+# source = "素材出处与授权说明"

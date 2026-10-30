@@ -1,0 +1,187 @@
+# 水杉输入法 v2 皮肤模板 —— 复制整个文件成 <皮肤目录>/skin.toml 再改。
+# v2 = schema_version 2 + base = "canvas"：面板外观完全来自九宫格贴图与挂件。
+# 未注释的键都是合法值；注释掉的是可选键，按需取消注释。
+# 所有图片路径都是占位符：把 assets/ 下的文件换成你自己的真实图片。
+
+schema_version = 2                 # 必须是数字 2
+id = "canvas-demo"                 # 必须等于目录名
+name = "全贴图示例"                 # 设置页显示名，≤80 字节
+version = "1.0.0"                  # ≤32 字节
+author = "你的名字"                 # 可选，≤120 字节
+description = "九宫格面板 + 卡外挂件" # 可选，≤500 字节
+base = "canvas"                    # v2 必须是 canvas
+
+[supports]
+layouts = ["horizontal", "vertical"]
+themes = ["dark", "light"]
+
+[candidate_window]                 # 直接键先写，子表都在后面
+min_width_dip = 320
+# corner_radius_dip = 0            # canvas 默认直角；有面板图时让给贴图
+# border_width_dip = 0             # canvas 默认无描边；有面板图时让给贴图
+item_corner_radius_dip = 6
+shadow = "none"                    # canvas 只有写 soft / strong 才画阴影
+backdrop = "none"                  # 有 border_image 时不生效
+font_family = "Segoe UI"
+page_arrows = false
+page_arrow_style = "chevron"
+fit_content = false
+expand_panel = false
+# expand_rows = 4                  # 仅 expand_panel = true 时生效；2~8 的整数
+line_gap_dip = 6                   # 预编辑行与候选行之间的距离，0~100
+
+[candidate_window.border_image]    # 九宫格面板图：整块卡片背景换成这张图
+source = "assets/panel.png"        # 必填；换成真实文件，只能是 .png/.apng/.gif/.webp
+# light_source = "assets/panel-light.png"  # 浅色主题换这张；切片、边宽、fill 与 source 共用
+slice_dip = [16, 44, 16, 44]       # 必填，「上 右 下 左」，1/2/4 个 0~500；单位是源图像素
+# stretch_dip = [16, 90, 16, 90]   # 可拉伸区（源图像素）；给出时它才是可拉伸区
+# width_dip = [16, 44, 16, 44]     # 边框绘制宽度（屏幕 DIP），缺省用 slice/stretch 的值
+# fill = true                      # false = 中心区也不画，露出 surface 底色
+# repeat = "stretch"               # stretch(默认) / repeat；1 个值两轴相同，2 个值「横向 纵向」
+
+[candidate_window.border_image.vertical]  # 竖排换用的面板图；只写与横排不同的键
+source = "assets/panel-vertical.png"      # 不写继承横排 source；写了文件必须存在
+slice_dip = [26, 10, 26, 10]              # 竖排几何通常要单独写一份
+# repeat = ["stretch", "repeat"]          # 横向拉伸、纵向平铺
+# light_source 不继承：竖排要浅色变体就自己写一张
+
+[candidate_window.content_insets_dip]  # 文字与内容的安全内边距，从面板外缘量起
+top = 4                            # 缺省 0；top / bottom ≤200，left / right ≤500
+right = 130
+bottom = 14
+left = 55
+
+[candidate_window.content_insets_dip.vertical]  # 竖排只覆盖写了的边
+left = 10
+right = 12
+
+[candidate_window.outer_insets_dip]  # 卡片四边之外预留的透明空白（给卡外挂件用）
+top = 87                           # 缺省 0；四边都 ≤500
+right = 16
+bottom = 4
+left = 0
+
+[[candidate_window.decorations]]   # 卡片外的自由挂件，数组表；最多 32 层
+image = "assets/char.png"          # 必填；换成真实文件
+anchor = "right"                   # 九个锚点，默认 right
+width_dip = 149                    # 必填，>0 且 ≤2000
+height_dip = 161                   # 必填，>0 且 ≤2000
+offset_x_dip = 10                  # -2000~2000，正数向右
+offset_y_dip = -15                 # -2000~2000，正数向下
+z_index = 3                        # -1000~1000，默认 2；面板自身相当于 1，小于 1 画在面板下
+
+# [[candidate_window.decorations]] # 想要第二层就再写一段
+# image = "assets/star.png"
+# anchor = "top-right"
+# width_dip = 48
+# height_dip = 48
+# z_index = 4
+
+# v1 的顶部装饰图与 v2 的卡外挂件是两套东西，可以同时用。
+# [candidate_window.decoration]
+# image = "assets/mountain.png"
+# top_inset_dip = 88
+# width_dip = 136
+# align = "right"
+
+[candidate.dark]                   # 22 个颜色键 + show_selected_bar；建议写全
+accent = "#6B69D6"
+selected = "#3e3e3eb9"
+hover = "#414141"
+surface = "#202020"                # 面板图不画中心区（fill = false）时露出的底色
+border = "#9b9b9b2e"
+text = "#e9e8e8"
+number = "#e9e8e89d"
+translation = "#e6a817"
+show_selected_bar = true
+candidate_text = "#e9e8e8"
+preedit_text = "#e9e8e8"
+preedit_caret = "#6B69D6"
+selected_text = "#ffffff"
+selected_number = "#ffffff"
+selected_translation = "#ffd479"
+selected_bar = "#6B69D6"
+preedit_background = "#ffffff10"
+preedit_divider = "#6B69D6"
+page_arrow_divider = "#6B69D6"
+translation_pos = "#e6a817"
+translation_separator = "#e6a817"
+selected_translation_pos = "#ffd479"
+selected_translation_separator = "#ffd479"
+
+[candidate.light]
+accent = "#6B69D6"
+selected = "#E8E8E8"
+hover = "#ECECEC"
+surface = "#FFFFFF"
+border = "rgba(0,0,0,.12)"
+text = "#1A1A1A"
+number = "#1A1A1A8C"
+translation = "#B8860B"
+show_selected_bar = true
+candidate_text = "#1A1A1A"
+preedit_text = "#1A1A1A"
+preedit_caret = "#6B69D6"
+selected_text = "#1A1A1A"
+selected_number = "#1A1A1A8C"
+selected_translation = "#B8860B"
+selected_bar = "#6B69D6"
+preedit_background = "#00000008"
+preedit_divider = "rgba(0,0,0,.12)"
+page_arrow_divider = "rgba(0,0,0,.12)"
+translation_pos = "#B8860B"
+translation_separator = "#B8860B"
+selected_translation_pos = "#B8860B"
+selected_translation_separator = "#B8860B"
+
+[toolbar]                          # 整条工具栏换成一张背景图
+mode = "image"
+image = "assets/toolbar.png"       # 必填；换成真实文件
+image_width_dip = 168              # 必填，>0 且 ≤2000
+image_height_dip = 40              # 必填，>0 且 ≤2000
+icon_corner_radius_dip = 15        # 0~16；图标悬停底色的圆角
+
+[toolbar.dark]                     # 图片模式下只有 icon / hover 影响内置矢量图标
+icon = "#FFFFFF"
+hover = "rgba(255,255,255,.10)"
+
+[toolbar.light]
+icon = "#1A1A1A"
+hover = "rgba(0,0,0,.06)"
+
+[toolbar.button_defaults]          # 按钮没写的尺寸 / 图标字号 / 底图取这里
+width_dip = 30
+height_dip = 30
+icon_size_dip = 20
+background = "assets/plate.png"
+
+[toolbar.button_flow]              # 没写坐标的按钮从这里开始排
+x_dip = 170
+y_dip = 0
+direction = "vertical"             # horizontal(默认) / vertical
+gap_dip = 2
+
+[toolbar.buttons.status]           # 按钮名只能是 status / fullwidth / punctuation /
+x_dip = 10                         # character_set / emoji / screen_keyboard / settings
+y_dip = 7
+width_dip = 26
+height_dip = 26
+icon_size_dip = 18
+background = "assets/plate.png"
+image = "assets/status.png"        # 各状态共用；没有状态图时用它
+visible = true
+
+[toolbar.buttons.status.images]    # 只有有状态的按钮能写
+cn = "assets/status-cn.png"
+en = "assets/status-en.png"
+
+[toolbar.buttons.settings]         # 无状态按钮只能写 image，不能写 images
+x_dip = 124
+y_dip = 7
+image = "assets/settings.png"
+
+# 授权声明，输入法不读，但分享出去前该写。
+# [license]
+# code = "MIT"
+# assets = "CC-BY-4.0 / 自绘"      # 来源未核实就写 UNVERIFIED
+# source = "素材出处与授权说明"

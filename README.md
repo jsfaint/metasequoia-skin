@@ -84,9 +84,9 @@ opencode 里如果技能被权限拦住，在 `opencode.json` 放行：
 
 改完 `skin.toml` 或图片后，点一次「刷新皮肤」就全量重载，**不需要重启输入法服务**。
 
-**只想改内置皮肤的翻页箭头或 `fit_content`**：不走外部皮肤这套流程。编辑 `<skins 目录>\default\<内置名>\skin.toml` 里 `[candidate_window]` 的 `page_arrows` 与 `fit_content`，然后点「刷新皮肤」。只有 `id`、`name`、`schema_version`、`page_arrows`、`fit_content` 会被读，其余字段写了不生效。
+**只想改内置皮肤的翻页箭头、`fit_content` 或卷轴展开**：不走外部皮肤这套流程。编辑 `<skins 目录>\default\<内置名>\skin.toml` 里 `[candidate_window]` 的 `page_arrows`、`fit_content` 与 `expand_panel`，然后点「刷新皮肤」。只有 `id`、`name`、`description`、`schema_version`、`page_arrows`、`fit_content`、`expand_panel` 会被读，其余字段写了不生效。
 
-**设置页根本不显示这个皮肤**：对照 [SKILL.md 的故障排查表](skills/metasequoia-skin/SKILL.md)。最常见的是目录层级错了、`id` 与目录名不一致、目录名带了大写或中文。
+**设置页根本不显示这个皮肤**：对照 [完整故障排查表](skills/metasequoia-skin/references/troubleshooting.md)。最常见的是目录层级错了、`id` 与目录名不一致、目录名带了大写或中文。
 
 ## 快速上手
 
@@ -97,7 +97,7 @@ opencode 里如果技能被权限拦住，在 `opencode.json` 放行：
 横排竖排都要，深浅两套都做
 ```
 
-AI 会问几个问题（明暗、要不要图、要不要改工具栏、翻页箭头），然后生成 `skin.toml`。
+AI 会问几个问题（明暗、要不要图、版式要不要微调、要不要卷轴展开、翻页箭头、工具栏配色或图片模式），然后生成 `skin.toml`。
 
 ### 2. 校验
 
@@ -117,42 +117,46 @@ uv run skills\metasequoia-skin\scripts\check_skin.py path\to\my-skin
 
 | 能改 | 参数 |
 |---|---|
-| 候选窗配色：基础 8 色 + 细分配色 9 项 + 翻译细分 4 项 + 选中竖条开关 | `[candidate.dark]` / `[candidate.light]` 的 21 个颜色键 + `show_selected_bar` |
+| 候选窗配色：基础 8 色 + 细分配色 10 项 + 翻译细分 4 项 + 选中竖条开关 | `[candidate.dark]` / `[candidate.light]` 的 22 个颜色键 + `show_selected_bar` |
 | 候选窗右键菜单配色 | `[candidate.dark.menu]` / `[candidate.light.menu]` |
 | 外框圆角 / 线宽 / 高亮圆角 / 阴影 / 最小宽度 | `candidate_window.corner_radius_dip`、`border_width_dip`、`item_corner_radius_dip`、`shadow`、`min_width_dip` |
 | 卡片背后的系统材质 | `candidate_window.backdrop`（`none` / `acrylic` / `mica`） |
 | 候选字体族（**不是字号**） | `candidate_window.font_family` |
 | 卡片严格按文字宽度收紧 | `candidate_window.fit_content`（`true` / `false`） |
-| 卡片内背景图 / 卡片上方装饰图 | `candidate_window.background` / `candidate_window.decoration` |
-| 翻页箭头 | `candidate_window.page_arrows` |
-| 悬浮工具栏配色与圆角 | `[toolbar]` / `[toolbar.dark]` / `[toolbar.light]` |
-| **v2（`schema_version = 2`，`base = "canvas"`）**：整块面板贴图（九宫格，浅色主题可换一张）、面板内安全内边距、行距、卡片外立绘挂件（多层）、卡片外留白、动图原生播放 | `candidate_window.border_image`（`source` / `light_source`）、`content_insets_dip`、`line_gap_dip`、`[[candidate_window.decorations]]`、`outer_insets_dip` |
+| 候选窗版式（内边距、间距、序号、选中竖条、高亮贴角 / 整行铺满、预编辑行边距） | `[candidate_window]` 的版式键，以及 `[candidate_window.horizontal]` / `[candidate_window.vertical]` 覆盖 |
+| 横排卷轴展开 | `candidate_window.expand_panel`（`true` / `false`）+ `expand_rows`（2~8） |
+| 翻页箭头样式 | `candidate_window.page_arrows`、`page_arrow_style`（`chevron` / `triangle`）、`[candidate.*].page_arrow_divider` |
+| 卡片内背景图 / 卡片上方装饰图 / 装饰图上叠候选词 | `candidate_window.background` / `candidate_window.decoration`（含 `candidate_overlay*`） |
+| 悬浮工具栏配色与圆角 | `[toolbar]` / `[toolbar.dark]` / `[toolbar.light]`、`icon_corner_radius_dip` |
+| 悬浮工具栏图片模式（背景图、按钮位置 / 状态图、自动排列） | `[toolbar] mode = "image"`、`image` / `image_width_dip` / `image_height_dip`、`[toolbar.buttons.<按钮>]`、`button_defaults`、`button_flow` |
+| **v2（`schema_version = 2`，`base = "canvas"`）**：整块面板贴图（九宫格拉伸 / 平铺、浅色与竖排各可换一张）、面板内安全内边距（含竖排覆盖）、行距、卡片外立绘挂件（多层）、卡片外留白、动图原生播放 | `candidate_window.border_image`（`source` / `light_source` / `repeat` / `.vertical`）、`content_insets_dip`（含 `.vertical`）、`line_gap_dip`、`[[candidate_window.decorations]]`、`outer_insets_dip` |
 
 | 做不到 | 说明 |
 |---|---|
 | 自定义 CSS / HTML / JavaScript | 外部皮肤**不接受任何 CSS 或脚本**，塞进去不会有任何效果 |
-| 字号、行内边距、候选框留白 | 字号由设置页的「候选字号」决定；行内边距与留白跟 `base` 走（v2 的 `content_insets_dip` 只能改四边的安全内边距） |
-| 工具栏尺寸、加按钮、改图标字形 | `[toolbar]` 只能改 6 个颜色 + 圆角 |
+| 改候选字号 / 预编辑字号 | 字号由设置页的「候选字号」决定；皮肤能改版式尺寸和装饰图上叠加词的字号，不能改候选本体字号 |
+| 新增工具栏按钮种类、改内置图标字形 | 按钮种类由输入法固定；图片模式只能换图、摆位置、隐藏，不能加新按钮 |
 | 菜单里加自定义条目 | 菜单条目是输入法内置的，皮肤只改配色 |
 | 全屏背景、窗口本身的其它透明特效 | 不在参数里。卡片背后的系统材质只有 `backdrop` 这一种（亚克力 / 云母，见上表） |
-| 改内置皮肤本身的外观 | 那是水杉仓库的源码，不是皮肤包（内置皮肤只有 `page_arrows`、`fit_content` 两个开关可改） |
+| 改内置皮肤本身的外观 | 那是水杉仓库的源码，不是皮肤包（内置皮肤只有 `page_arrows`、`fit_content`、`expand_panel` 三个开关可改） |
 
 ### `base` 选哪个
 
-`base` 决定几何形态和没写到的键的默认值，选了它之后你仍然可以覆写所有配色和圆角。
+`base` 决定几何形态和没写到的键的默认值，选了它之后你仍然可以覆写配色、圆角和版式。
 
 | base | 观感 | 圆角 / 线宽 / 高亮圆角 | 选中形态 | accent（dark / light） |
 |---|---|---|---|---|
 | `fluent` | 默认，Windows 11 味 | 6 / 1.5 / 4 | 左侧竖色条 | `#6B69D6` / `#6B69D6` |
 | `wechat` | 微信绿 `#07C160` | 5 / 1 / 4 | 整行绿底白字，无竖条 | `#07C160` |
-| `graphite` | 石墨灰，紧凑平直 | 3 / 1 / 2 | 灰底无竖条 | `#8993A0` / `#5F6B7A` |
+| `wechat_scroll` | 微信绿 + 横排卷轴展开 | 10 / 1 / 6 | 整行绿底白字，无竖条 | `#07C160` |
+| `graphite` | 石墨灰，紧凑平直 | 3 / 1 / 2 | 不铺底，只换文字色，无竖条 | `#8993A0` / `#5F6B7A` |
 | `willow_green` | 杨柳青，无边框、高亮铺满 | 9 / 0 / 0 | 整行整列铺满，无竖条 | `#65C98D` / `#58B980` |
 | `autumn_osmanthus` | 秋桂，无边框、橙色高亮内缩 | 10 / 0 / 6 | 内缩橙块，无竖条 | `#F97D0A` / `#E6A817` |
 | `microsoft` | 仿微软拼音，紧凑、三角翻页箭头 | 8 / 1 / 4 | 灰块 + 竖条在块内 | `#E183D9` / `#E183D9` |
 
-`microsoft` 唯一自带 `page_arrows = true`，其余五个都是关的。选它做 `base` 又不写 `page_arrows`，用户会莫名多出翻页箭头。
+`microsoft` 唯一自带 `page_arrows = true`，其余六个都是关的；`wechat_scroll` 唯一自带 `expand_panel = true`。选这两个做 `base` 又不写对应开关时，用户会遇到不预期的箭头或横排卷轴展开。
 
-除了这六个内置皮肤，`base` 还能写水杉与 msime 共用的**共享基底**，以及只给 v2 用的**全贴图地基**：
+除了这七个内置皮肤，`base` 还能写水杉与 msime 共用的**共享基底**，以及只给 v2 用的**全贴图地基**：
 
 | base | 观感 | 明暗 |
 |---|---|---|
@@ -211,9 +215,11 @@ preedit_divider = "#6B69D6"
 # ... 同上，换一套浅色值
 ```
 
-完整模板、全部字段的取值范围和每个硬性约束见 [`skills/metasequoia-skin/SKILL.md`](skills/metasequoia-skin/SKILL.md)。
+完整模板、全部字段的取值范围和每个硬性约束见 [`skills/metasequoia-skin/references/`](skills/metasequoia-skin/references/)：v1 看 `schema-v1.md`，v2 看 `schema-v2.md`，硬性规则与报错看 `validation.md`，可复制模板在 `templates/`。
 
-**要整块贴图面板或卡片外立绘**：把 `schema_version` 改成 `2`，并**必须同时把 `base` 改成 `"canvas"`**，再用 v2 追加字段（`border_image` / `content_insets_dip` / `line_gap_dip` / `decorations` / `outer_insets_dip`）。v2 字段只在 `schema_version = 2` 且 `base = "canvas"` 时被解析；写了 `2` 却用别的基底，包仍能装也能用，但按 v1 加载、v2 字段全部被忽略（设置页诊断里会多一条说明）。反过来 `schema_version = 1` 配 `canvas` 会被直接拒收。细节见 SKILL.md 的 v2 小节。
+**要整块贴图面板或卡片外立绘**：把 `schema_version` 改成 `2`，并**必须同时把 `base` 改成 `"canvas"`**，再用 v2 追加字段（`border_image` / `content_insets_dip` / `line_gap_dip` / `decorations` / `outer_insets_dip`）。v2 字段只在 `schema_version = 2` 且 `base = "canvas"` 时被解析；写了 `2` 却用别的基底，包仍能装也能用，但按 v1 加载、v2 字段全部被忽略（设置页诊断里会多一条说明）。反过来 `schema_version = 1` 配 `canvas` 会被直接拒收。细节见 [`schema-v2.md`](skills/metasequoia-skin/references/schema-v2.md)。
+
+`[animation]` 和装饰图的 `motion` / `motion_period_ms` 是 msime 各平台共用的 v2 键；Windows 目前按静态图显示，不报错也不提示，写了也不会动。
 
 ### 五条容易踩的规则
 
@@ -231,7 +237,15 @@ preedit_divider = "#6B69D6"
 ├─ README.md
 └─ skills/
    └─ metasequoia-skin/
-      ├─ SKILL.md              # 技能正文：完整字段规范、流程、故障排查表
+      ├─ SKILL.md              # 主流程、边界、决策表与按需链接
+      ├─ references/           # 按需加载：字段、v2、工具栏图片模式、校验、图片、排查、模板
+      │  ├─ schema-v1.md
+      │  ├─ schema-v2.md
+      │  ├─ toolbar-image-mode.md
+      │  ├─ validation.md
+      │  ├─ images.md
+      │  ├─ troubleshooting.md
+      │  └─ templates/
       └─ scripts/
          └─ check_skin.py      # 离线校验器，无第三方依赖
 ```
@@ -240,7 +254,7 @@ preedit_divider = "#6B69D6"
 
 这个仓库**不包含水杉输入法本体**，只包含生成外部皮肤包的知识和校验器。
 
-`SKILL.md` 的字段、范围、报错文案逐条对齐 Server 的解析器 `server/src/skin/candidate_skin_catalog.cpp`（`CandidateSkinCatalog::Load`），`check_skin.py` 是它的 Python 等价实现，错误文案也沿用同一套中文，方便和设置页「皮肤 → 外部皮肤」底部的诊断信息对照。
+技能里的字段、范围、报错文案（`SKILL.md` 与 `references/`）逐条对齐 Server 的解析器 `server/src/skin/candidate_skin_catalog.cpp`（`CandidateSkinCatalog::Load`），`check_skin.py` 是它的 Python 等价实现，错误文案也沿用同一套中文，方便和设置页「皮肤 → 外部皮肤」底部的诊断信息对照。
 
 **水杉源码变了之后，请回来同步修改 `SKILL.md` 和 `scripts/check_skin.py`**，别让两套规则分叉。校验器的每个函数注释里都标了对应的 C++ 函数名。
 
